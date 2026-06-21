@@ -178,6 +178,9 @@ func runRestore(args []string) {
 	fileKey, err := bbcrypto.DeriveFileKey(masterKey, hashBytes)
 	must(err)
 
+	// storeFileID matches what backup used: hex prefix of the chunk-hash, NOT the manifest UUID.
+	storeFileID := fileIDFromHash(hashBytes)
+
 	enc, err := codec.NewEncoder(entry.Scheme)
 	must(err)
 
@@ -200,7 +203,7 @@ func runRestore(args []string) {
 			globalShardIdx := ci*shardsPerChunk + si
 			loc := entry.Shards[globalShardIdx]
 
-			ciphertext, err := store.Get(*fileID, loc.ShardIndex)
+			ciphertext, err := store.Get(storeFileID, loc.ShardIndex)
 			if err != nil {
 				// Shard missing — set nil so RS can reconstruct.
 				log.Printf("[restore] shard %d missing, will reconstruct", globalShardIdx)
