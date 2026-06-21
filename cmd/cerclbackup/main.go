@@ -15,19 +15,28 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 
+	"github.com/cerclbackup/cerclbackup/internal/buddy"
 	"github.com/cerclbackup/cerclbackup/internal/chunker"
 	"github.com/cerclbackup/cerclbackup/internal/codec"
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
+	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
+	"github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 func main() {
@@ -43,6 +52,16 @@ func main() {
 		runRestore(os.Args[2:])
 	case "list":
 		runList(os.Args[2:])
+	case "serve":
+		runServe(os.Args[2:])
+	case "invite":
+		runInvite(os.Args[2:])
+	case "join":
+		runJoin(os.Args[2:])
+	case "buddy":
+		runBuddy(os.Args[2:])
+	case "revoke":
+		runRevoke(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -50,12 +69,19 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `CerclBackup Phase 1
+	fmt.Fprintln(os.Stderr, `CerclBackup
 
-Commands:
+Commands (Phase 1 — local):
   backup   --src <path> --store <dir> --password <pwd> [--buddies N]
   restore  --file-id <uuid> --store <dir> --out <path> --password <pwd>
-  list     --store <dir> --password <pwd>`)
+  list     --store <dir> --password <pwd>
+
+Commands (Phase 2a — P2P):
+  serve    --password <pwd> [--port N]          start P2P daemon
+  invite   --password <pwd>                      generate invite code
+  join     --addr <multiaddr> --words "<mnemonic>" --password <pwd>
+  buddy    list --password <pwd>                 list known buddies
+  revoke   --peer-id <id> --password <pwd>       remove a buddy`)
 }
 
 // ─── BACKUP ──────────────────────────────────────────────────────────────────
@@ -333,4 +359,289 @@ func hexToHash(s string) ([32]byte, error) {
 	}
 	copy(out[:], b)
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// P2P helpers
+// ---------------------------------------------------------------------------
+
+func openKeystore(password string) (*bbcrypto.Keystore, error) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	ksPath := filepath.Join(cfgDir, "cerclbackup", "keystore.enc")
+	ks := bbcrypto.NewKeystore(ksPath)
+	if err := ks.Unlock(password); err != nil {
+		return nil, fmt.Errorf("keystore unlock: %w", err)
+	}
+	return ks, nil
+}
+
+func openRegistry(ks *bbcrypto.Keystore) (*buddy.Registry, error) {
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	regPath := filepath.Join(cfgDir, "cerclbackup", "buddies.enc")
+	return buddy.NewRegistry(regPath, ks.MasterKey())
+}
+
+func openInviteManager() *invite.Manager {
+	cfgDir, _ := os.UserConfigDir()
+	invPath := filepath.Join(cfgDir, "cerclbackup", "invites.json")
+	return invite.NewManager(invPath)
+}
+
+// ---------------------------------------------------------------------------
+// serve
+// ---------------------------------------------------------------------------
+
+func runServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	password := fs.String("password", "", "keystore password (required)")
+	port := fs.Int("port", p2p.DefaultPort, "TCP/UDP port for libp2p")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	privKey, err := p2p.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	h, err := p2p.NewHost(privKey, *port)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer h.Close()
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cfgDir, _ := os.UserConfigDir()
+	storeDir := filepath.Join(cfgDir, "cerclbackup", "shards")
+	bs := buddy.NewStore(storeDir)
+	invMgr := openInviteManager()
+
+	p2p.RegisterHandlers(h, reg, bs, invMgr)
+
+	if _, err := p2p.StartMDNS(h, reg); err != nil {
+		log.Printf("[serve] mDNS start: %v", err)
+	}
+
+	fmt.Printf("CerclBackup daemon running\n")
+	fmt.Printf("Peer ID : %s\n", h.ID())
+	for _, a := range h.Addrs() {
+		fmt.Printf("Address : %s/p2p/%s\n", a, h.ID())
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+	fmt.Println("\nShutting down.")
+}
+
+// ---------------------------------------------------------------------------
+// invite
+// ---------------------------------------------------------------------------
+
+func runInvite(args []string) {
+	fs := flag.NewFlagSet("invite", flag.ExitOnError)
+	password := fs.String("password", "", "keystore password (required)")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if _, err := openKeystore(*password); err != nil {
+		log.Fatal(err)
+	}
+
+	invMgr := openInviteManager()
+	code, err := invMgr.Generate()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	words := code.Words
+	// split and show last 3 for verbal confirmation
+	wlist := splitWords(words)
+	verbally := ""
+	if len(wlist) >= 3 {
+		verbally = fmt.Sprintf("%s %s %s", wlist[len(wlist)-3], wlist[len(wlist)-2], wlist[len(wlist)-1])
+	}
+
+	fmt.Printf("Invite code (give to your buddy):\n\n  %s\n\n", words)
+	fmt.Printf("Ask your buddy to verbally confirm the LAST 3 WORDS: %q\n", verbally)
+	fmt.Printf("Code expires in 24 hours.\n")
+}
+
+func splitWords(s string) []string {
+	var words []string
+	start := 0
+	for i, c := range s {
+		if c == ' ' {
+			if i > start {
+				words = append(words, s[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		words = append(words, s[start:])
+	}
+	return words
+}
+
+// ---------------------------------------------------------------------------
+// join
+// ---------------------------------------------------------------------------
+
+func runJoin(args []string) {
+	fs := flag.NewFlagSet("join", flag.ExitOnError)
+	addr := fs.String("addr", "", "full multiaddr of the inviter, e.g. /ip4/1.2.3.4/tcp/7742/p2p/<peerID>")
+	words := fs.String("words", "", "12-word invite mnemonic from your buddy")
+	password := fs.String("password", "", "keystore password (required)")
+	name := fs.String("name", "", "friendly name for this buddy (optional)")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *addr == "" || *words == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	privKey, err := p2p.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	h, err := p2p.NewHost(privKey, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer h.Close()
+
+	token, err := invite.TokenFromMnemonic(*words)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	maddr, err := multiaddr.NewMultiaddr(*addr)
+	if err != nil {
+		log.Fatalf("invalid addr: %v", err)
+	}
+	addrInfo, err := peer.AddrInfoFromP2pAddr(maddr)
+	if err != nil {
+		log.Fatalf("addr parse: %v", err)
+	}
+
+	if err := h.Connect(context.Background(), *addrInfo); err != nil {
+		log.Fatalf("connect: %v", err)
+	}
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := p2p.SendInviteRequest(context.Background(), h, reg, addrInfo.ID, token, *name); err != nil {
+		log.Fatalf("invite: %v", err)
+	}
+
+	fmt.Printf("Paired with buddy %s\n", addrInfo.ID)
+}
+
+// ---------------------------------------------------------------------------
+// buddy list
+// ---------------------------------------------------------------------------
+
+func runBuddy(args []string) {
+	if len(args) == 0 || args[0] != "list" {
+		fmt.Fprintln(os.Stderr, "usage: cerclbackup buddy list --password <pwd>")
+		os.Exit(1)
+	}
+
+	fs := flag.NewFlagSet("buddy list", flag.ExitOnError)
+	password := fs.String("password", "", "keystore password (required)")
+	if err := fs.Parse(args[1:]); err != nil {
+		log.Fatal(err)
+	}
+	if *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	entries := reg.List()
+	if len(entries) == 0 {
+		fmt.Println("No buddies yet.")
+		return
+	}
+	fmt.Printf("%-20s  %s\n", "Friendly Name", "Peer ID")
+	fmt.Printf("%-20s  %s\n", "-------------", "-------")
+	for _, e := range entries {
+		name := e.FriendlyName
+		if name == "" {
+			name = "(unnamed)"
+		}
+		fmt.Printf("%-20s  %s\n", name, e.PeerID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// revoke
+// ---------------------------------------------------------------------------
+
+func runRevoke(args []string) {
+	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
+	peerID := fs.String("peer-id", "", "peer ID to remove (required)")
+	password := fs.String("password", "", "keystore password (required)")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *peerID == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := reg.Remove(*peerID); err != nil {
+		log.Fatalf("revoke: %v", err)
+	}
+	fmt.Printf("Buddy %s removed.\n", *peerID)
 }
