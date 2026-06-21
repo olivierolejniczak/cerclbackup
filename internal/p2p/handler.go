@@ -17,12 +17,48 @@ import (
 
 // RegisterHandlers attaches all CerclBackup protocol handlers to h.
 func RegisterHandlers(h host.Host, reg *buddy.Registry, bs *buddy.Store, invMgr *invite.Manager) {
-	h.SetStreamHandler(wire.ProtoShard, func(s network.Stream) {
+	h.SetStreamHandler(wire.ProtoPush, func(s network.Stream) {
 		handleShard(s, h, reg, bs)
+	})
+	h.SetStreamHandler(wire.ProtoPull, func(s network.Stream) {
+		handlePull(s, reg, bs)
 	})
 	h.SetStreamHandler(wire.ProtoInvite, func(s network.Stream) {
 		handleInvite(s, h, reg, invMgr)
 	})
+}
+
+// handlePull serves a ShardRequest from a known buddy.
+func handlePull(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
+	defer s.Close()
+
+	remotePeerID := s.Conn().RemotePeer().String()
+	if !reg.IsKnown(remotePeerID) {
+		_ = wire.WriteMsg(s, wire.ShardResponse{
+			Type:  wire.TypeShardResponse,
+			Found: false,
+		})
+		return
+	}
+
+	var req wire.ShardRequest
+	if err := wire.ReadMsg(s, &req); err != nil {
+		log.Printf("[handler] pull read from %s: %v", remotePeerID, err)
+		return
+	}
+
+	data, err := bs.Get(req.OwnerID, req.FileID, req.ShardIndex)
+	resp := wire.ShardResponse{
+		Type:       wire.TypeShardResponse,
+		FileID:     req.FileID,
+		ShardIndex: req.ShardIndex,
+	}
+	if err == nil {
+		resp.Data = data
+		resp.Found = true
+		log.Printf("[handler] served shard %s/%d to %s", req.FileID, req.ShardIndex, remotePeerID)
+	}
+	_ = wire.WriteMsg(s, resp)
 }
 
 // handleShard receives a ShardPush from a buddy, verifies the sender is
