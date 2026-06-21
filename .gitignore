@@ -1,0 +1,16 @@
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.env
+secrets/
+keystore.enc
+manifest.enc
