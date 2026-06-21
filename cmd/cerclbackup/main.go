@@ -225,15 +225,16 @@ func runRestore(args []string) {
 		chunkData, err := enc.MergeShardToChunk(rawShards)
 		must(err)
 
-		// Trim padding on the last chunk.
+		// Trim RS padding from every chunk: non-last chunks are DefaultChunkSize,
+		// last chunk is entry.Size % DefaultChunkSize (or DefaultChunkSize if divisible).
+		expectedSize := chunker.DefaultChunkSize
 		if ci == numChunks-1 {
-			lastChunkSize := int(entry.Size) % chunker.DefaultChunkSize
-			if lastChunkSize == 0 {
-				lastChunkSize = chunker.DefaultChunkSize
+			if rem := int(entry.Size) % chunker.DefaultChunkSize; rem != 0 {
+				expectedSize = rem
 			}
-			if lastChunkSize < len(chunkData) {
-				chunkData = chunkData[:lastChunkSize]
-			}
+		}
+		if expectedSize < len(chunkData) {
+			chunkData = chunkData[:expectedSize]
 		}
 
 		if _, err := outFile.Write(chunkData); err != nil {
