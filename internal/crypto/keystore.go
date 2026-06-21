@@ -22,12 +22,14 @@ type Keystore struct {
 	path      string
 	masterKey []byte
 	salt      []byte
+	extras    map[string][]byte
 	unlocked  bool
 }
 
 type keystoreJSON struct {
-	MasterKey []byte `json:"master_key"`
-	Salt      []byte `json:"salt"`
+	MasterKey []byte            `json:"master_key"`
+	Salt      []byte            `json:"salt"`
+	Extras    map[string][]byte `json:"extras,omitempty"`
 }
 
 // DefaultKeystorePath returns the platform-appropriate default path.
@@ -92,6 +94,7 @@ func (k *Keystore) Unlock(password string) error {
 
 	k.salt = kj.Salt
 	k.masterKey = kj.MasterKey
+	k.extras = kj.Extras
 	k.unlocked = true
 	return nil
 }
@@ -115,10 +118,31 @@ func (k *Keystore) Save(password string) error {
 	return k.save(password)
 }
 
+// LoadExtra returns a previously stored extra value by name, or nil if not found.
+func (k *Keystore) LoadExtra(name string) []byte {
+	if k.extras == nil {
+		return nil
+	}
+	return k.extras[name]
+}
+
+// StoreExtra adds/updates an extra value and re-saves the keystore to disk.
+func (k *Keystore) StoreExtra(name string, data []byte, password string) error {
+	if !k.unlocked {
+		return fmt.Errorf("keystore: cannot store extra on locked keystore")
+	}
+	if k.extras == nil {
+		k.extras = make(map[string][]byte)
+	}
+	k.extras[name] = data
+	return k.save(password)
+}
+
 func (k *Keystore) save(password string) error {
 	kj := keystoreJSON{
 		MasterKey: k.masterKey,
 		Salt:      k.salt,
+		Extras:    k.extras,
 	}
 	plaintext, err := json.Marshal(kj)
 	if err != nil {
