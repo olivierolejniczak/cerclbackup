@@ -112,7 +112,7 @@ func TestShardPushPull(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := p2p.PushShard(ctx, alice, bob.ID(), push); err != nil {
+	if err := p2p.PushShard(ctx, alice, bob.ID(), push.OwnerID, push.FileID, push.ShardIndex, push.IsParity, push.Data); err != nil {
 		t.Fatalf("PushShard: %v", err)
 	}
 
@@ -152,7 +152,7 @@ func TestUnknownPeerRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := p2p.PushShard(ctx, alice, bob.ID(), push)
+	err := p2p.PushShard(ctx, alice, bob.ID(), push.OwnerID, push.FileID, push.ShardIndex, push.IsParity, push.Data)
 	if err == nil {
 		t.Fatal("expected rejection of unknown peer, got nil")
 	}
@@ -222,5 +222,60 @@ func TestPushQueue(t *testing.T) {
 	// Verify the item was enqueued (queue is non-nil)
 	if q == nil {
 		t.Fatal("expected non-nil queue")
+	}
+}
+
+// TestShardFetch verifies the pull protocol: Alice stores a shard and Bob
+// fetches it over a real libp2p connection.
+func TestShardFetch(t *testing.T) {
+	dir := t.TempDir()
+
+	priv1, _, _ := crypto.GenerateEd25519Key(nil)
+	priv2, _, _ := crypto.GenerateEd25519Key(nil)
+
+	alice, err := p2p.NewHost(priv1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+
+	bob, err := p2p.NewHost(priv2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bob.Close()
+
+	// Both hosts know each other
+	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
+	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("fakepk")})
+	aliceStore := buddy.NewStore(filepath.Join(dir, "alice_store"))
+
+	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
+	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("fakepk")})
+	bobStore := buddy.NewStore(filepath.Join(dir, "bob_store"))
+
+	p2p.RegisterHandlers(alice, aliceReg, aliceStore, invite.NewManager(filepath.Join(dir, "alice_inv.json")))
+	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "bob_inv.json")))
+
+	_ = bob.Connect(context.Background(), peer.AddrInfo{ID: alice.ID(), Addrs: alice.Addrs()})
+
+	// Alice stores a shard (as if a buddy pushed it to her)
+	shardData := []byte("pull-this-shard-from-alice")
+	ownerID := alice.ID().String()
+	fileID := "fetchtest"
+	shardIdx := 3
+	if err := aliceStore.Put(ownerID, fileID, shardIdx, shardData); err != nil {
+		t.Fatalf("aliceStore.Put: %v", err)
+	}
+
+	// Bob fetches it from Alice
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := p2p.FetchShard(ctx, bob, alice.ID(), ownerID, fileID, shardIdx)
+	if err != nil {
+		t.Fatalf("FetchShard: %v", err)
+	}
+	if !bytes.Equal(got, shardData) {
+		t.Errorf("data mismatch: got %q want %q", got, shardData)
 	}
 }

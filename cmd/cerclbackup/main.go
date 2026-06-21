@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
 	"github.com/cerclbackup/cerclbackup/internal/chunker"
@@ -32,10 +33,12 @@ import (
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
-	"github.com/cerclbackup/cerclbackup/internal/p2p"
+	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
+	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/cerclbackup/cerclbackup/pkg/wire"
 	"github.com/multiformats/go-multiaddr"
 )
 
@@ -170,6 +173,9 @@ func runBackup(args []string) {
 
 	log.Printf("[backup] ✅ done — file-id: %s  shards: %d  scheme: %d/%d",
 		entry.FileID, len(shardLocations), scheme.DataShards, scheme.ParityShards)
+
+	// -- 7. Push shards to buddies (Phase 2b) -----------------------------------------------
+	pushToBuddies(ks, *password, fileIDFromHash(fileHash), shardLocations, store)
 }
 
 // ─── RESTORE ─────────────────────────────────────────────────────────────────
@@ -208,6 +214,36 @@ func runRestore(args []string) {
 	// storeFileID matches what backup used: hex prefix of the chunk-hash, NOT the manifest UUID.
 	storeFileID := fileIDFromHash(hashBytes)
 
+	// -- Phase 2b: open ephemeral P2P host to fetch missing shards from buddies --
+	var restoreHost host.Host
+	var buddyReg *buddy.Registry
+	restoreCtx := context.Background()
+	if privKey, err := p2pmod.EnsurePeerIdentity(ks, *password); err == nil {
+		if rh, err := p2pmod.NewHost(privKey, 0); err == nil {
+			restoreHost = rh
+			defer rh.Close()
+			if reg, err := openRegistry(ks); err == nil {
+				buddyReg = reg
+				// Connect to known buddies
+				for _, entry := range reg.List() {
+					pID, err := peer.Decode(entry.PeerID)
+					if err != nil { continue }
+					var addrs []multiaddr.Multiaddr
+					for _, a := range entry.Addrs {
+						ma, _ := multiaddr.NewMultiaddr(a)
+						if ma != nil { addrs = append(addrs, ma) }
+					}
+					_ = rh.Connect(restoreCtx, peer.AddrInfo{ID: pID, Addrs: addrs})
+				}
+				log.Printf("[restore] P2P host ready, connected to %d buddy addr(s)", len(reg.List()))
+			}
+		}
+	}
+	ownPeerID := ""
+	if restoreHost != nil {
+		ownPeerID = restoreHost.ID().String()
+	}
+
 	enc, err := codec.NewEncoder(entry.Scheme)
 	must(err)
 
@@ -232,15 +268,24 @@ func runRestore(args []string) {
 
 			ciphertext, err := store.Get(storeFileID, loc.ShardIndex)
 			if err != nil {
-				// Shard missing — set nil so RS can reconstruct.
-				log.Printf("[restore] shard %d missing, will reconstruct", globalShardIdx)
-				rawShards[si] = nil
-				continue
+				// Try to fetch from a connected buddy before giving up.
+				if restoreHost != nil && buddyReg != nil {
+					if fetched, ok := tryFetchFromBuddies(restoreCtx, restoreHost, buddyReg, ownPeerID, storeFileID, loc.ShardIndex); ok {
+						log.Printf("[restore] fetched shard %d from buddy", globalShardIdx)
+						ciphertext = fetched
+						err = nil
+					}
+				}
+				if err != nil {
+					log.Printf("[restore] shard %d missing, will reconstruct", globalShardIdx)
+					rawShards[si] = nil
+					continue
+				}
 			}
 
 			plaintext, err := bbcrypto.DecryptShard(fileKey, loc.ShardIndex, ciphertext)
 			if err != nil {
-				log.Printf("[restore] shard %d decrypt error: %v — treating as missing", globalShardIdx, err)
+				log.Printf("[restore] shard %d decrypt error: %v -- treating as missing", globalShardIdx, err)
 				rawShards[si] = nil
 				continue
 			}
@@ -400,7 +445,7 @@ func openInviteManager() *invite.Manager {
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	password := fs.String("password", "", "keystore password (required)")
-	port := fs.Int("port", p2p.DefaultPort, "TCP/UDP port for libp2p")
+	port := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -414,12 +459,12 @@ func runServe(args []string) {
 		log.Fatal(err)
 	}
 
-	privKey, err := p2p.EnsurePeerIdentity(ks, *password)
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	h, err := p2p.NewHost(privKey, *port)
+	h, err := p2pmod.NewHost(privKey, *port)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -435,9 +480,9 @@ func runServe(args []string) {
 	bs := buddy.NewStore(storeDir)
 	invMgr := openInviteManager()
 
-	p2p.RegisterHandlers(h, reg, bs, invMgr)
+	p2pmod.RegisterHandlers(h, reg, bs, invMgr)
 
-	if _, err := p2p.StartMDNS(h, reg); err != nil {
+	if _, err := p2pmod.StartMDNS(h, reg); err != nil {
 		log.Printf("[serve] mDNS start: %v", err)
 	}
 
@@ -530,11 +575,11 @@ func runJoin(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	privKey, err := p2p.EnsurePeerIdentity(ks, *password)
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
 	if err != nil {
 		log.Fatal(err)
 	}
-	h, err := p2p.NewHost(privKey, 0)
+	h, err := p2pmod.NewHost(privKey, 0)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -563,7 +608,7 @@ func runJoin(args []string) {
 		log.Fatal(err)
 	}
 
-	if err := p2p.SendInviteRequest(context.Background(), h, reg, addrInfo.ID, token, *name); err != nil {
+	if err := p2pmod.SendInviteRequest(context.Background(), h, reg, addrInfo.ID, token, *name); err != nil {
 		log.Fatalf("invite: %v", err)
 	}
 
@@ -644,4 +689,111 @@ func runRevoke(args []string) {
 		log.Fatalf("revoke: %v", err)
 	}
 	fmt.Printf("Buddy %s removed.\n", *peerID)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2b -- P2P push/fetch helpers
+// ---------------------------------------------------------------------------
+
+// pushToBuddies opens an ephemeral P2P host and pushes all shards for fileID
+// to every registered buddy. Offline buddies are enqueued for retry.
+func pushToBuddies(ks *bbcrypto.Keystore, password, fileID string, locs []protocol.ShardLocation, store *storage.Store) {
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, password)
+	if err != nil {
+		log.Printf("[backup] P2P identity: %v", err)
+		return
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Printf("[backup] P2P host: %v", err)
+		return
+	}
+	defer h.Close()
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Printf("[backup] registry: %v", err)
+		return
+	}
+	buddies := reg.List()
+	if len(buddies) == 0 {
+		return
+	}
+
+	cfgDir, _ := os.UserConfigDir()
+	q := p2pmod.NewQueue(filepath.Join(cfgDir, "cerclbackup", "queue.json"))
+	ownerID := h.ID().String()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	for _, entry := range buddies {
+		peerID, err := peer.Decode(entry.PeerID)
+		if err != nil {
+			continue
+		}
+		// Try to connect via known addresses
+		var addrs []multiaddr.Multiaddr
+		for _, a := range entry.Addrs {
+			ma, err := multiaddr.NewMultiaddr(a)
+			if err == nil {
+				addrs = append(addrs, ma)
+			}
+		}
+		connected := false
+		if len(addrs) > 0 {
+			if err := h.Connect(ctx, peer.AddrInfo{ID: peerID, Addrs: addrs}); err == nil {
+				connected = true
+			}
+		}
+
+		if !connected {
+			log.Printf("[backup] buddy %s unreachable, enqueueing %d shards", entry.PeerID, len(locs))
+			for _, loc := range locs {
+				ciphertext, err := store.Get(fileID, loc.ShardIndex)
+				if err != nil {
+					continue
+				}
+				_ = q.Enqueue(entry.PeerID, wire.ShardPush{
+					Type:       wire.TypeShardPush,
+					OwnerID:    ownerID,
+					FileID:     fileID,
+					ShardIndex: loc.ShardIndex,
+					IsParity:   loc.IsParity,
+					Data:       ciphertext,
+				})
+			}
+			continue
+		}
+
+		pushed := 0
+		for _, loc := range locs {
+			ciphertext, err := store.Get(fileID, loc.ShardIndex)
+			if err != nil {
+				continue
+			}
+			if err := p2pmod.PushShard(ctx, h, peerID, ownerID, fileID, loc.ShardIndex, loc.IsParity, ciphertext); err != nil {
+				log.Printf("[backup] push shard %d to %s: %v", loc.ShardIndex, entry.PeerID, err)
+			} else {
+				pushed++
+			}
+		}
+		log.Printf("[backup] pushed %d/%d shards to buddy %s", pushed, len(locs), entry.PeerID)
+	}
+}
+
+
+// tryFetchFromBuddies tries each buddy in reg to fetch a missing encrypted shard.
+func tryFetchFromBuddies(ctx context.Context, h host.Host, reg *buddy.Registry, ownerPeerID, fileID string, shardIdx int) ([]byte, bool) {
+	for _, entry := range reg.List() {
+		peerID, err := peer.Decode(entry.PeerID)
+		if err != nil {
+			continue
+		}
+		data, err := p2pmod.FetchShard(ctx, h, peerID, ownerPeerID, fileID, shardIdx)
+		if err == nil {
+			return data, true
+		}
+	}
+	return nil, false
 }

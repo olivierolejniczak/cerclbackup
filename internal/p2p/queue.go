@@ -65,7 +65,8 @@ func (q *Queue) FlushToPeer(ctx context.Context, h host.Host, peerID peer.ID) {
 			remaining = append(remaining, item)
 			continue
 		}
-		if err := PushShard(ctx, h, peerID, item.Push); err != nil {
+		push := item.Push
+		if err := PushShard(ctx, h, peerID, push.OwnerID, push.FileID, push.ShardIndex, push.IsParity, push.Data); err != nil {
 			log.Printf("[queue] push shard %s/%d to %s: %v — keeping in queue",
 				item.Push.FileID, item.Push.ShardIndex, peerIDStr, err)
 			remaining = append(remaining, item)
