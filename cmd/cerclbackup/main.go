@@ -16,6 +16,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -137,7 +138,7 @@ func runBackup(args []string) {
 	// ── 6. Update manifest ────────────────────────────────────────────────────
 	info, err := os.Stat(*src)
 	must(err)
-	entry, err := mf.Upsert(*src, info.Size(), scheme, shardLocations)
+	entry, err := mf.Upsert(*src, fileHash, info.Size(), scheme, shardLocations)
 	must(err)
 	must(mf.Save())
 
@@ -322,20 +323,12 @@ func fileIDFromHash(h [32]byte) string {
 
 func hexToHash(s string) ([32]byte, error) {
 	var out [32]byte
-	b := make([]byte, 32)
-	if _, err := fmt.Sscanf(s, "%x", &b); err != nil {
-		// Fallback: try direct hex decode
-		if len(s) < 64 {
-			return out, fmt.Errorf("hash string too short: %q", s)
-		}
-		for i := 0; i < 32; i++ {
-			var v byte
-			_, err := fmt.Sscanf(s[i*2:i*2+2], "%02x", &v)
-			if err != nil {
-				return out, err
-			}
-			b[i] = v
-		}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return out, fmt.Errorf("hexToHash: %w", err)
+	}
+	if len(b) != 32 {
+		return out, fmt.Errorf("hexToHash: expected 32 bytes, got %d", len(b))
 	}
 	copy(out[:], b)
 	return out, nil

@@ -108,12 +108,9 @@ func (m *Manifest) Save() error {
 }
 
 // Upsert creates or replaces the entry for the given file path.
-// It hashes the file at srcPath to produce a stable FileID.
-func (m *Manifest) Upsert(srcPath string, size int64, scheme protocol.RSScheme, shards []protocol.ShardLocation) (*protocol.ManifestEntry, error) {
-	hash, err := hashFile(srcPath)
-	if err != nil {
-		return nil, err
-	}
+// contentHash must be the same hash used to derive the store fileID (fileHashFromChunks).
+func (m *Manifest) Upsert(srcPath string, contentHash [32]byte, size int64, scheme protocol.RSScheme, shards []protocol.ShardLocation) (*protocol.ManifestEntry, error) {
+	hash := contentHash
 
 	info, err := os.Stat(srcPath)
 	if err != nil {
