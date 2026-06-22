@@ -116,10 +116,14 @@ func handleInvite(s network.Stream, h host.Host, reg *buddy.Registry, invMgr *in
 		return
 	}
 
+	// Accept either a 12-word BIP39 token (classic invite) or an 8-byte
+	// pre-image whose SHA-256 matches a registered email-invite commitment.
 	if err := invMgr.Consume(req.Token); err != nil {
-		log.Printf("[handler] invite token invalid: %v", err)
-		_ = wire.WriteMsg(s, wire.InviteResponse{Type: wire.TypeInviteResponse, OK: false, Error: err.Error()})
-		return
+		if err2 := invMgr.ConsumeCommitment(req.Token); err2 != nil {
+			log.Printf("[handler] invite token invalid (token: %v, commitment: %v)", err, err2)
+			_ = wire.WriteMsg(s, wire.InviteResponse{Type: wire.TypeInviteResponse, OK: false, Error: err.Error()})
+			return
+		}
 	}
 
 	// Serialise own public key for the response

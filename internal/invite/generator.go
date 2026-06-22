@@ -1,7 +1,9 @@
 package invite
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,8 +31,15 @@ type Pending struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// Commitment holds the SHA-256 hash of an email-invite OOB secret.
+type Commitment struct {
+	Hash      []byte    `json:"hash"`       // SHA-256 of the pre-image
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type pendingStore struct {
-	Pending []*Pending `json:"pending"`
+	Pending     []*Pending    `json:"pending"`
+	Commitments []*Commitment `json:"commitments,omitempty"`
 }
 
 // Manager generates and validates invite codes.
@@ -165,4 +174,49 @@ func (m *Manager) saveLocked(s *pendingStore) error {
 		return fmt.Errorf("invite: mkdir: %w", err)
 	}
 	return os.WriteFile(m.path, data, 0600)
+}
+
+// AddCommitment registers the SHA-256 hash of an email-invite OOB secret so
+// that ConsumeCommitment can verify the pre-image when the joiner connects.
+func (m *Manager) AddCommitment(hash []byte, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	store, err := m.loadLocked()
+	if err != nil {
+		return err
+	}
+	store.Commitments = append(store.Commitments, &Commitment{
+		Hash:      hash,
+		ExpiresAt: expiresAt,
+	})
+	return m.saveLocked(store)
+}
+
+// ConsumeCommitment verifies that SHA-256(preimage) matches a non-expired
+// pending commitment and removes it (one-time use).  Returns an error if no
+// matching commitment is found.
+func (m *Manager) ConsumeCommitment(preimage []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	store, err := m.loadLocked()
+	if err != nil {
+		return err
+	}
+
+	h := sha256.Sum256(preimage)
+	now := time.Now()
+	remaining := store.Commitments[:0]
+	found := false
+	for _, c := range store.Commitments {
+		if !found && !now.After(c.ExpiresAt) && bytes.Equal(c.Hash, h[:]) {
+			found = true // consume — do not append
+			continue
+		}
+		remaining = append(remaining, c)
+	}
+	if !found {
+		return fmt.Errorf("invite: no valid commitment for presented pre-image")
+	}
+	store.Commitments = remaining
+	return m.saveLocked(store)
 }
