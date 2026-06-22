@@ -109,8 +109,11 @@ aucun fallback en simple miroir 1/1.
 Voir `ARCHITECTURE.md` pour le détail complet des phases.
 
 - **Phase 1** ✅ Pipeline local (chunker + RS + AES + store + manifest)
-- **Phase 2** 🔲 Réseau P2P (libp2p, mDNS, invitation email/MFA, scrub/auto-réparation, zéro DHT)
-- **Phase 2b** 🔲 Mode appareils personnels (Master Device Key, NAS ARM64)
+- **Phase 2a** ✅ P2P invite/join, buddy registry, push/pull protocol, offline queue
+- **Phase 2b** ✅ Backup pushes shards to buddies; restore fetches missing shards; full RS+AES+P2P pipeline tested
+- **Phase 2c** ✅ Scrub — SHA-256 shard verification; Silent Revive re-fetches corrupted shards from owner
+- **Phase 2d** ✅ Rebalance — `revoke` auto-redistributes to surviving buddies; `rebalance` command for manual passes
+- **Phase 2e** 🔲 mDNS LAN discovery, email invites, MFA
 - **Phase 3** 🔲 UI Windows (systray, installeur, cercles multiples, versioning)
 
 ## Licence
