@@ -13,10 +13,11 @@ import (
 
 const mdnsServiceTag = "_cerclbackup._tcp"
 
-// StartMDNS starts mDNS discovery. When a peer is found it is connected
-// only if it is already in the buddy registry (TOFU — no auto-accept).
-func StartMDNS(h host.Host, reg *buddy.Registry) (mdns.Service, error) {
-	n := &buddyNotifee{host: h, reg: reg}
+// StartMDNS starts mDNS LAN discovery. When a buddy is found it is connected
+// and any queued shards for that peer are flushed immediately.
+// q may be nil if offline queue is not used (e.g. in tests).
+func StartMDNS(h host.Host, reg *buddy.Registry, q *Queue) (mdns.Service, error) {
+	n := &buddyNotifee{host: h, reg: reg, queue: q}
 	svc := mdns.NewMdnsService(h, mdnsServiceTag, n)
 	if err := svc.Start(); err != nil {
 		return nil, err
@@ -25,15 +26,17 @@ func StartMDNS(h host.Host, reg *buddy.Registry) (mdns.Service, error) {
 }
 
 type buddyNotifee struct {
-	host host.Host
-	reg  *buddy.Registry
+	host  host.Host
+	reg   *buddy.Registry
+	queue *Queue
 }
 
 func (n *buddyNotifee) HandlePeerFound(info peer.AddrInfo) {
 	if !n.reg.IsKnown(info.ID.String()) {
-		return // unknown peer — ignore
+		return // unknown peer -- ignore (TOFU)
 	}
-	// Update stored addresses
+
+	// Persist the freshly-discovered LAN addresses.
 	addrStrs := make([]string, len(info.Addrs))
 	for i, a := range info.Addrs {
 		addrStrs[i] = a.String()
@@ -45,4 +48,9 @@ func (n *buddyNotifee) HandlePeerFound(info peer.AddrInfo) {
 		return
 	}
 	log.Printf("[mdns] connected to buddy %s", info.ID)
+
+	// Flush any shards queued while this buddy was offline.
+	if n.queue != nil {
+		go n.queue.FlushToPeer(context.Background(), n.host, info.ID)
+	}
 }
