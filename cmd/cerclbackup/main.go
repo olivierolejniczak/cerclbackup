@@ -487,7 +487,8 @@ func runServe(args []string) {
 
 	p2pmod.RegisterHandlers(h, reg, bs, invMgr)
 
-	if _, err := p2pmod.StartMDNS(h, reg); err != nil {
+	q := p2pmod.NewQueue(filepath.Join(cfgDir, "cerclbackup", "queue.json"))
+	if _, err := p2pmod.StartMDNS(h, reg, q); err != nil {
 		log.Printf("[serve] mDNS start: %v", err)
 	}
 
