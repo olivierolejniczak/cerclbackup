@@ -34,6 +34,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
+	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
@@ -66,6 +67,8 @@ func main() {
 		runBuddy(os.Args[2:])
 	case "revoke":
 		runRevoke(os.Args[2:])
+	case "rebalance":
+		runRebalance(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -85,7 +88,8 @@ Commands (Phase 2a — P2P):
   invite   --password <pwd>                      generate invite code
   join     --addr <multiaddr> --words "<mnemonic>" --password <pwd>
   buddy    list --password <pwd>                 list known buddies
-  revoke   --peer-id <id> --password <pwd>       remove a buddy`)
+  revoke    --peer-id <id> --password <pwd>       remove a buddy and rebalance
+  rebalance --password <pwd> [--store <dir>]     redistribute shards to all buddies`)
 }
 
 // ─── BACKUP ──────────────────────────────────────────────────────────────────
@@ -692,6 +696,11 @@ func runRevoke(args []string) {
 		log.Fatalf("revoke: %v", err)
 	}
 	fmt.Printf("Buddy %s removed.\n", *peerID)
+
+	// Auto-rebalance: push all locally-stored shards to the surviving buddies
+	// so redundancy is restored without manual intervention.
+	fmt.Println("Rebalancing shards across remaining buddies...")
+	rebalanceWithKeystore(ks, *password)
 }
 
 // ---------------------------------------------------------------------------
@@ -799,4 +808,84 @@ func tryFetchFromBuddies(ctx context.Context, h host.Host, reg *buddy.Registry, 
 		}
 	}
 	return nil, false
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2d -- Rebalance
+// ---------------------------------------------------------------------------
+
+func runRebalance(args []string) {
+	fs := flag.NewFlagSet("rebalance", flag.ExitOnError)
+	password := fs.String("password", "", "keystore password (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "local shard store directory")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+	_ = storeDir // used by rebalanceWithKeystore via DefaultStorePath or explicit value
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	rebalanceWithKeystore(ks, *password)
+}
+
+// rebalanceWithKeystore pushes every locally-stored shard to every registered
+// buddy. It is called both by runRebalance and automatically by runRevoke.
+func rebalanceWithKeystore(ks *bbcrypto.Keystore, password string) {
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, password)
+	if err != nil {
+		log.Printf("[rebalance] P2P identity: %v", err)
+		return
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Printf("[rebalance] P2P host: %v", err)
+		return
+	}
+	defer h.Close()
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Printf("[rebalance] registry: %v", err)
+		return
+	}
+
+	localStore, err := storage.New(storage.DefaultStorePath())
+	if err != nil {
+		log.Printf("[rebalance] open local store: %v", err)
+		return
+	}
+
+	mf := openManifest(ks.MasterKey())
+
+	entries := mf.All()
+	fileIDs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		fileIDs = append(fileIDs, e.FileID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	ownerID := h.ID().String()
+	rb := rebalance.New(ownerID, localStore, reg, h)
+	res, err := rb.Run(ctx, fileIDs)
+	if err != nil {
+		log.Printf("[rebalance] run: %v", err)
+		return
+	}
+
+	fmt.Printf("Rebalance complete: %d file(s), %d/%d shards pushed to buddies.\n",
+		res.FilesProcessed, res.ShardsOK, res.ShardsAttempted)
+	if len(res.Errors) > 0 {
+		fmt.Printf("  %d error(s):\n", len(res.Errors))
+		for _, e := range res.Errors {
+			fmt.Printf("    - %s\n", e)
+		}
+	}
 }
