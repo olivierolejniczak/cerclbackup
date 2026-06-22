@@ -33,6 +33,7 @@ import (
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
+	"github.com/cerclbackup/cerclbackup/internal/emailinvite"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
@@ -61,6 +62,10 @@ func main() {
 		runServe(os.Args[2:])
 	case "invite":
 		runInvite(os.Args[2:])
+	case "invite-email":
+		runInviteEmail(os.Args[2:])
+	case "join-email":
+		runJoinEmail(os.Args[2:])
 	case "join":
 		runJoin(os.Args[2:])
 	case "buddy":
@@ -89,7 +94,9 @@ Commands (Phase 2a — P2P):
   join     --addr <multiaddr> --words "<mnemonic>" --password <pwd>
   buddy    list --password <pwd>                 list known buddies
   revoke    --peer-id <id> --password <pwd>       remove a buddy and rebalance
-  rebalance --password <pwd> [--store <dir>]     redistribute shards to all buddies`)
+  rebalance    --password <pwd> [--store <dir>]     redistribute shards to all buddies
+  invite-email --to <email> --circle <name> --password <pwd> [--smtp-*]  email MFA invite
+  join-email   --payload <file> --words "<12 words>" --password <pwd>    accept email invite`)
 }
 
 // ─── BACKUP ──────────────────────────────────────────────────────────────────
@@ -889,4 +896,161 @@ func rebalanceWithKeystore(ks *bbcrypto.Keystore, password string) {
 			fmt.Printf("    - %s\n", e)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2f -- Email invite (dual-channel MFA)
+// ---------------------------------------------------------------------------
+
+func runInviteEmail(args []string) {
+	fs := flag.NewFlagSet("invite-email", flag.ExitOnError)
+	to := fs.String("to", "", "recipient email address (required)")
+	circle := fs.String("circle", "CerclBackup", "circle name shown in email")
+	password := fs.String("password", "", "keystore password (required)")
+	smtpHost := fs.String("smtp-host", "", "SMTP host (omit to print email to stdout)")
+	smtpPort := fs.Int("smtp-port", 587, "SMTP port")
+	smtpUser := fs.String("smtp-user", "", "SMTP username")
+	smtpPass := fs.String("smtp-pass", "", "SMTP password")
+	smtpFrom := fs.String("smtp-from", "", "SMTP sender address")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *to == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer h.Close()
+
+	// Extract raw Ed25519 private key from libp2p key.
+	rawPriv, err := privKey.Raw()
+	if err != nil {
+		log.Fatalf("invite-email: raw private key: %v", err)
+	}
+	edPriv := rawPriv // go ed25519.PrivateKey is []byte
+
+	payload, words, err := emailinvite.Generate(edPriv, h.ID().String(), *circle, 48*time.Hour)
+	if err != nil {
+		log.Fatalf("invite-email: generate: %v", err)
+	}
+
+	// Register commitment in invite manager so join-email can verify.
+	invMgr := openInviteManager()
+	secret, _ := emailinvite.SecretFromWords(words)
+	expiry, _ := time.Parse(time.RFC3339, payload.Expiry)
+	sum := sha256Sum(secret)
+	if err := invMgr.AddCommitment(sum[:], expiry); err != nil {
+		log.Fatalf("invite-email: register commitment: %v", err)
+	}
+
+	// Send or print the payload.
+	if *smtpHost != "" {
+		cfg := emailinvite.SMTPConfig{
+			Host:     *smtpHost,
+			Port:     *smtpPort,
+			Username: *smtpUser,
+			Password: *smtpPass,
+			From:     *smtpFrom,
+		}
+		if err := emailinvite.Send(cfg, *to, payload); err != nil {
+			log.Fatalf("invite-email: send: %v", err)
+		}
+		fmt.Printf("Email sent to %s\n", *to)
+	} else {
+		data, _ := emailinvite.ToJSON(payload)
+		fmt.Println("=== PASTE THIS INTO YOUR EMAIL ===")
+		fmt.Println(string(data))
+		fmt.Println("==================================")
+	}
+
+	fmt.Println("\n*** SHARE THIS CODE VIA SMS / SIGNAL / VOICE — NOT BY EMAIL ***")
+	fmt.Printf("12-word OOB code: %s\n", words)
+	fmt.Printf("Peer ID: %s\n", h.ID())
+}
+
+func runJoinEmail(args []string) {
+	fs := flag.NewFlagSet("join-email", flag.ExitOnError)
+	payloadFile := fs.String("payload", "", "path to invite JSON file (required)")
+	wordsStr := fs.String("words", "", "12-word OOB code received out-of-band (required)")
+	password := fs.String("password", "", "keystore password (required)")
+	if err := fs.Parse(args); err != nil {
+		log.Fatal(err)
+	}
+	if *payloadFile == "" || *wordsStr == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	data, err := os.ReadFile(*payloadFile)
+	if err != nil {
+		log.Fatalf("join-email: read payload: %v", err)
+	}
+	payload, err := emailinvite.FromJSON(data)
+	if err != nil {
+		log.Fatalf("join-email: parse payload: %v", err)
+	}
+
+	// Dual-channel verification: signature + commitment.
+	if err := emailinvite.Verify(payload, *wordsStr); err != nil {
+		log.Fatalf("join-email: verification failed: %v", err)
+	}
+	fmt.Println("Invite verified (signature + OOB commitment match).")
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatal(err)
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer h.Close()
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Decode the OOB secret to use as the invite token.
+	secret, err := emailinvite.SecretFromWords(*wordsStr)
+	if err != nil {
+		log.Fatalf("join-email: decode words: %v", err)
+	}
+
+	// Resolve inviter's peer ID and connect.
+	inviterPeerID, err := peer.Decode(payload.PeerID)
+	if err != nil {
+		log.Fatalf("join-email: decode peer ID: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := p2pmod.SendInviteRequest(ctx, h, reg, inviterPeerID, secret, h.ID().String()); err != nil {
+		log.Fatalf("join-email: P2P handshake: %v", err)
+	}
+
+	fmt.Printf("Joined circle \"%s\" — buddy %s added.\n", payload.Circle, payload.PeerID)
+}
+
+func sha256Sum(data []byte) [32]byte {
+	return sha256.Sum256(data)
 }

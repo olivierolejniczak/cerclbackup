@@ -114,7 +114,7 @@ Voir `ARCHITECTURE.md` pour le détail complet des phases.
 - **Phase 2c** ✅ Scrub — SHA-256 shard verification; Silent Revive re-fetches corrupted shards from owner
 - **Phase 2d** ✅ Rebalance — `revoke` auto-redistributes to surviving buddies; `rebalance` command for manual passes
 - **Phase 2e** ✅ mDNS LAN discovery — auto-connect to known buddies on LAN; addresses persisted; offline queue flushed on peer found
-- **Phase 2f** 🔲 Email invites, MFA
+- **Phase 2f** ✅ Email MFA invite — dual-channel: email carries signed payload + commitment, OOB (SMS/voice) carries 12-word secret; `invite-email` + `join-email` CLI commands
 - **Phase 3** 🔲 UI Windows (systray, installeur, cercles multiples, versioning)
 
 ## Licence
