@@ -1,6 +1,8 @@
 package buddy
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -60,4 +62,100 @@ func (s *Store) Delete(ownerPeerID, fileID string, shardIndex int) error {
 func (s *Store) DeleteOwner(ownerPeerID string) error {
 	p := filepath.Join(s.root, "remote", ownerPeerID)
 	return os.RemoveAll(p)
+}
+
+// hashPath returns the sidecar hash file path for a shard.
+func (s *Store) hashPath(ownerPeerID, fileID string, shardIndex int) string {
+	return s.shardPath(ownerPeerID, fileID, shardIndex) + ".hash"
+}
+
+// PutWithHash stores the shard data and a sidecar SHA-256 hash file used by
+// the scrub manager to detect corruption later.
+func (s *Store) PutWithHash(ownerPeerID, fileID string, shardIndex int, data []byte) error {
+	if err := s.Put(ownerPeerID, fileID, shardIndex, data); err != nil {
+		return err
+	}
+	sum := sha256.Sum256(data)
+	return os.WriteFile(s.hashPath(ownerPeerID, fileID, shardIndex), sum[:], 0600)
+}
+
+// Verify reads the stored shard, recomputes its SHA-256, and compares it to
+// the sidecar hash written by PutWithHash. Returns false if the shard or its
+// hash file is missing, or if the hashes do not match.
+func (s *Store) Verify(ownerPeerID, fileID string, shardIndex int) bool {
+	data, err := s.Get(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return false
+	}
+	expected, err := os.ReadFile(s.hashPath(ownerPeerID, fileID, shardIndex))
+	if err != nil {
+		return false
+	}
+	actual := sha256.Sum256(data)
+	return bytes.Equal(actual[:], expected)
+}
+
+// ShardRef identifies a single shard stored in the buddy store.
+type ShardRef struct {
+	OwnerPeerID string
+	FileID      string
+	ShardIndex  int
+}
+
+// ListAll walks the store and returns a reference for every shard present.
+func (s *Store) ListAll() ([]ShardRef, error) {
+	root := filepath.Join(s.root, "remote")
+	var refs []ShardRef
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if filepath.Ext(path) != ".shard" {
+			return nil
+		}
+		// path = <root>/remote/<ownerPeerID>/<fileID>/<idx>.shard
+		rel, _ := filepath.Rel(root, path)
+		parts := filepath.SplitList(filepath.ToSlash(rel))
+		// SplitList splits on os.PathListSeparator, not path separator — use Split
+		dir, base := filepath.Split(rel)
+		dir = filepath.Clean(dir)
+		ownerAndFile := filepath.SplitList(dir)
+		_ = ownerAndFile
+		// Parse manually: rel = owner/fileID/idx.shard
+		segs := splitPath(rel)
+		if len(segs) != 3 {
+			return nil
+		}
+		idxStr := segs[2][:len(segs[2])-len(".shard")]
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			return nil
+		}
+		_ = base
+		_ = parts
+		refs = append(refs, ShardRef{
+			OwnerPeerID: segs[0],
+			FileID:      segs[1],
+			ShardIndex:  idx,
+		})
+		return nil
+	})
+	return refs, err
+}
+
+// splitPath splits a filepath into its slash-separated components.
+func splitPath(p string) []string {
+	p = filepath.ToSlash(p)
+	var parts []string
+	for p != "" && p != "." {
+		dir, file := filepath.Split(p)
+		if file != "" {
+			parts = append([]string{file}, parts...)
+		}
+		p = filepath.Clean(dir)
+		if p == "." {
+			break
+		}
+	}
+	return parts
 }
