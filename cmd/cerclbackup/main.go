@@ -34,6 +34,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
+	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -486,14 +487,16 @@ func runServe(args []string) {
 		log.Printf("[serve] mDNS start: %v", err)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	scrubpkg.New(bs, h, reg).Start(ctx, 6*time.Hour)
+
 	fmt.Printf("CerclBackup daemon running\n")
 	fmt.Printf("Peer ID : %s\n", h.ID())
 	for _, a := range h.Addrs() {
 		fmt.Printf("Address : %s/p2p/%s\n", a, h.ID())
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	<-ctx.Done()
 	fmt.Println("\nShutting down.")
 }

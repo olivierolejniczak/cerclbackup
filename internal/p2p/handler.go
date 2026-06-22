@@ -84,7 +84,7 @@ func handleShard(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.S
 		return
 	}
 
-	if err := bs.Put(push.OwnerID, push.FileID, push.ShardIndex, push.Data); err != nil {
+	if err := bs.PutWithHash(push.OwnerID, push.FileID, push.ShardIndex, push.Data); err != nil {
 		log.Printf("[handler] store shard %s/%d: %v", push.FileID, push.ShardIndex, err)
 		_ = wire.WriteMsg(s, wire.ShardAck{
 			Type:       wire.TypeShardAck,
