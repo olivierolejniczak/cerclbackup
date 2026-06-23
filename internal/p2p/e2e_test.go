@@ -30,6 +30,7 @@ import (
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/p2p"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 )
@@ -55,10 +56,14 @@ func TestP2BPushAndFetchE2E(t *testing.T) {
 
 	// Registries: mutual knowledge
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice)}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 
 	// Shard stores
 	aliceStore := buddy.NewStore(filepath.Join(dir, "alice_shards"))
@@ -184,9 +189,13 @@ func fullPipelineTest(t *testing.T, deleteParity bool) {
 	defer bob.Close()
 
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice)}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_shards"))
 	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "b_inv.json")))

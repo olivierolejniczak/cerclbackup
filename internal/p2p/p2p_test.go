@@ -3,6 +3,7 @@ package p2p_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,10 +14,16 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/p2p"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 )
 
-var testMasterKey = make([]byte, 32)
+var testMasterKey []byte
+
+func TestMain(m *testing.M) {
+	testMasterKey = testutil.RandMasterKey()
+	os.Exit(m.Run())
+}
 
 func newTestHost(t *testing.T) (interface{ ID() peer.ID }, crypto.PrivKey) {
 	t.Helper()
@@ -86,9 +93,12 @@ func TestShardPushPull(t *testing.T) {
 	}
 	defer bob.Close()
 
-	// Bob knows Alice as buddy
+	// Bob knows Alice as buddy — store her real pubkey for checkBuddyAuth.
+	alicePub := testutil.MarshaledPubKey(t, alice)
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("fakepk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: alicePub}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_store"))
 
 	// Register shard handler on Bob
@@ -96,8 +106,9 @@ func TestShardPushPull(t *testing.T) {
 	p2p.RegisterHandlers(bob, bobReg, bobStore, bobInvMgr)
 
 	// Connect Alice → Bob
-	bob.Peerstore().AddAddrs(bob.ID(), bob.Addrs(), time.Minute)
-	_ = alice.Connect(context.Background(), peer.AddrInfo{ID: bob.ID(), Addrs: bob.Addrs()})
+	if err := alice.Connect(context.Background(), peer.AddrInfo{ID: bob.ID(), Addrs: bob.Addrs()}); err != nil {
+		t.Fatalf("connect alice->bob: %v", err)
+	}
 
 	// Push a shard
 	shardData := []byte("this is an encrypted shard payload")
@@ -245,19 +256,28 @@ func TestShardFetch(t *testing.T) {
 	}
 	defer bob.Close()
 
-	// Both hosts know each other
+	// Both hosts know each other — real pubkeys required for checkBuddyAuth.
+	alicePub2 := testutil.MarshaledPubKey(t, alice)
+	bobPub := testutil.MarshaledPubKey(t, bob)
+
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("fakepk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: bobPub}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 	aliceStore := buddy.NewStore(filepath.Join(dir, "alice_store"))
 
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("fakepk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: alicePub2}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_store"))
 
 	p2p.RegisterHandlers(alice, aliceReg, aliceStore, invite.NewManager(filepath.Join(dir, "alice_inv.json")))
 	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "bob_inv.json")))
 
-	_ = bob.Connect(context.Background(), peer.AddrInfo{ID: alice.ID(), Addrs: alice.Addrs()})
+	if err := bob.Connect(context.Background(), peer.AddrInfo{ID: alice.ID(), Addrs: alice.Addrs()}); err != nil {
+		t.Fatalf("connect bob->alice: %v", err)
+	}
 
 	// Alice stores a shard (as if a buddy pushed it to her)
 	shardData := []byte("pull-this-shard-from-alice")

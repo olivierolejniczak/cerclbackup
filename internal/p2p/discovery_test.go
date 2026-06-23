@@ -14,6 +14,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/p2p"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 )
 
@@ -39,11 +40,15 @@ func TestMDNSConnectsKnownPeer(t *testing.T) {
 
 	// Alice's registry knows Bob.
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_shards"))
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice)}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "b_inv.json")))
 
 	// Start mDNS on Alice with no queue (just testing connect behaviour).
@@ -141,11 +146,15 @@ func TestMDNSFlushesQueueOnConnect(t *testing.T) {
 	defer bob.Close()
 
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_shards"))
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice)}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "b_inv.json")))
 
 	// Enqueue a shard for Bob while Bob is "offline".

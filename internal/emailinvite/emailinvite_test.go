@@ -39,16 +39,22 @@ func TestGenerateAndVerify(t *testing.T) {
 	}
 }
 
-// TestVerifyWrongWords: wrong OOB code must be rejected.
+// TestVerifyWrongWords: a syntactically valid 12-word mnemonic whose SHA-256
+// does not match the payload commitment must be rejected.
 func TestVerifyWrongWords(t *testing.T) {
 	priv, _ := newTestKey(t)
-	p, _, err := emailinvite.Generate(priv, "12D3KooWTest", "Famille", time.Hour)
+	// Generate two independent payloads; each has a distinct secret.
+	p1, _, err := emailinvite.Generate(priv, "12D3KooWTest", "Famille", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongWords := "abandon abandon abandon abandon abandon abandon"
-	if err := emailinvite.Verify(p, wrongWords); err == nil {
-		t.Error("expected error for wrong OOB words, got nil")
+	_, words2, err := emailinvite.Generate(priv, "12D3KooWTest", "Famille", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// words2 decodes fine but its secret doesn't match p1's commitment.
+	if err := emailinvite.Verify(p1, words2); err == nil {
+		t.Error("expected commitment mismatch error, got nil")
 	}
 }
 
