@@ -21,19 +21,64 @@ func RegisterHandlers(h host.Host, reg *buddy.Registry, bs *buddy.Store, invMgr 
 		handleShard(s, h, reg, bs)
 	})
 	h.SetStreamHandler(wire.ProtoPull, func(s network.Stream) {
-		handlePull(s, reg, bs)
+		handlePull(s, h, reg, bs)
 	})
 	h.SetStreamHandler(wire.ProtoInvite, func(s network.Stream) {
 		handleInvite(s, h, reg, invMgr)
 	})
 }
 
-// handlePull serves a ShardRequest from a known buddy.
-func handlePull(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
-	defer s.Close()
+// checkBuddyAuth verifies two things:
+//  1. The remote peer is in the buddy registry (IsKnown).
+//  2. The stored public key in the registry matches the key the remote peer
+//     proved ownership of at the libp2p transport layer.
+//
+// For Ed25519 peers the public key is embedded in the peer ID, so
+// peer.ID.ExtractPublicKey() recovers it without a peerstore lookup.
+// Returns false (and logs) if either check fails.
+func checkBuddyAuth(reg *buddy.Registry, remotePeer peer.ID) bool {
+	peerIDStr := remotePeer.String()
+	entry, ok := reg.Get(peerIDStr)
+	if !ok {
+		return false
+	}
 
-	remotePeerID := s.Conn().RemotePeer().String()
-	if !reg.IsKnown(remotePeerID) {
+	if len(entry.PubKey) == 0 {
+		// No key stored yet — allow but warn.  This covers entries added
+		// before key verification was introduced; they should be re-added.
+		log.Printf("[auth] warning: no pubkey stored for buddy %s, skipping verification", peerIDStr)
+		return true
+	}
+
+	stored, err := libp2pcrypto.UnmarshalPublicKey(entry.PubKey)
+	if err != nil {
+		log.Printf("[auth] stored pubkey for %s is not a valid key: %v — rejecting", peerIDStr, err)
+		return false
+	}
+
+	// Ed25519 peer IDs embed the public key; extract it from the ID itself.
+	connPub, err := remotePeer.ExtractPublicKey()
+	if err != nil || connPub == nil {
+		log.Printf("[auth] cannot extract pubkey from peer ID %s: %v — rejecting", peerIDStr, err)
+		return false
+	}
+
+	if !stored.Equals(connPub) {
+		log.Printf("[auth] pubkey mismatch for peer %s — registry key differs from connection key — rejecting", peerIDStr)
+		return false
+	}
+	return true
+}
+
+// handlePull serves a ShardRequest from a known, authenticated buddy.
+func handlePull(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.Store) {
+	defer s.Close()
+	_ = h // reserved for future peerstore lookups
+
+	remotePeer := s.Conn().RemotePeer()
+	remotePeerID := remotePeer.String()
+	if !checkBuddyAuth(reg, remotePeer) {
+		log.Printf("[handler] pull from unauthenticated peer %s — rejected", remotePeerID)
 		_ = wire.WriteMsg(s, wire.ShardResponse{
 			Type:  wire.TypeShardResponse,
 			Found: false,
@@ -62,14 +107,16 @@ func handlePull(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
 }
 
 // handleShard receives a ShardPush from a buddy, verifies the sender is
-// known, stores the shard, and sends back a ShardAck.
+// known and authentic, stores the shard, and sends back a ShardAck.
 func handleShard(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.Store) {
 	defer s.Close()
+	_ = h // reserved for future peerstore lookups
 
-	remotePeerID := s.Conn().RemotePeer().String()
+	remotePeer := s.Conn().RemotePeer()
+	remotePeerID := remotePeer.String()
 
-	if !reg.IsKnown(remotePeerID) {
-		log.Printf("[handler] shard from unknown peer %s — rejected", remotePeerID)
+	if !checkBuddyAuth(reg, remotePeer) {
+		log.Printf("[handler] shard from unauthenticated peer %s — rejected", remotePeerID)
 		_ = wire.WriteMsg(s, wire.ShardAck{
 			Type:  wire.TypeShardAck,
 			OK:    false,

@@ -3,6 +3,7 @@ package rebalance_test
 import (
 	"context"
 	"crypto/rand"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,9 +16,15 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 )
 
-var testMasterKey = make([]byte, 32)
+var testMasterKey []byte
+
+func TestMain(m *testing.M) {
+	testMasterKey = testutil.RandMasterKey()
+	os.Exit(m.Run())
+}
 
 // TestRebalancePushesToNewBuddy: Alice has a local shard store and one buddy
 // (Bob) that already has all shards. Carol is a newly-added buddy with zero
@@ -61,8 +68,12 @@ func TestRebalancePushesToNewBuddy(t *testing.T) {
 	for _, a := range bob.Addrs() {
 		bobAddrs = append(bobAddrs, a.String())
 	}
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk"), Addrs: bobAddrs})
-	_ = aliceReg.Add(&buddy.Entry{PeerID: carol.ID().String(), PubKey: []byte("pk"), Addrs: carolAddrs})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob), Addrs: bobAddrs}); err != nil {
+		t.Fatalf("aliceReg.Add bob: %v", err)
+	}
+	if err := aliceReg.Add(&buddy.Entry{PeerID: carol.ID().String(), PubKey: testutil.MarshaledPubKey(t, carol), Addrs: carolAddrs}); err != nil {
+		t.Fatalf("aliceReg.Add carol: %v", err)
+	}
 
 	// --- Bob and Carol each have a registry that knows Alice ----------------
 	aliceAddrs := make([]string, 0, len(alice.Addrs()))
@@ -70,10 +81,14 @@ func TestRebalancePushesToNewBuddy(t *testing.T) {
 		aliceAddrs = append(aliceAddrs, a.String())
 	}
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk"), Addrs: aliceAddrs})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice), Addrs: aliceAddrs}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 
 	carolReg, _ := buddy.NewRegistry(filepath.Join(dir, "carol_reg.enc"), testMasterKey)
-	_ = carolReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk"), Addrs: aliceAddrs})
+	if err := carolReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice), Addrs: aliceAddrs}); err != nil {
+		t.Fatalf("carolReg.Add: %v", err)
+	}
 
 	// --- Buddy stores -------------------------------------------------------
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_shards"))
@@ -170,10 +185,14 @@ func TestRebalanceIdempotent(t *testing.T) {
 	defer cancel()
 
 	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: []byte("pk")})
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: testutil.MarshaledPubKey(t, alice)}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 
 	bobStore := buddy.NewStore(filepath.Join(dir, "bob_shards"))
 	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "b_inv.json")))

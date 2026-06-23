@@ -7,10 +7,15 @@ import (
 	"time"
 
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 )
 
-// masterKey is 32 bytes of zeros for test purposes.
-var testMasterKey = make([]byte, 32)
+var testMasterKey []byte
+
+func TestMain(m *testing.M) {
+	testMasterKey = testutil.RandMasterKey()
+	os.Exit(m.Run())
+}
 
 func TestRegistry_AddIsKnownRemove(t *testing.T) {
 	dir := t.TempDir()
@@ -47,7 +52,9 @@ func TestRegistry_Persistence(t *testing.T) {
 	path := filepath.Join(dir, "registry.enc")
 
 	reg, _ := buddy.NewRegistry(path, testMasterKey)
-	_ = reg.Add(&buddy.Entry{PeerID: "peer-alice", PubKey: []byte("pk")})
+	if err := reg.Add(&buddy.Entry{PeerID: "peer-alice", PubKey: []byte("pk")}); err != nil {
+		t.Fatal(err)
+	}
 
 	// Reload from disk
 	reg2, err := buddy.NewRegistry(path, testMasterKey)
@@ -80,8 +87,12 @@ func TestStore_DeleteOwner(t *testing.T) {
 	dir := t.TempDir()
 	s := buddy.NewStore(dir)
 
-	_ = s.Put("peer-alice", "file1", 0, []byte("shard0"))
-	_ = s.Put("peer-alice", "file1", 1, []byte("shard1"))
+	if err := s.Put("peer-alice", "file1", 0, []byte("shard0")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Put("peer-alice", "file1", 1, []byte("shard1")); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := s.DeleteOwner("peer-alice"); err != nil {
 		t.Fatal(err)

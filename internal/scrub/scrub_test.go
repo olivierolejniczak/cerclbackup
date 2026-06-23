@@ -3,6 +3,7 @@ package scrub_test
 import (
 	"context"
 	"crypto/rand"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,9 +15,15 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/scrub"
+	"github.com/cerclbackup/cerclbackup/internal/testutil"
 )
 
-var testMasterKey = make([]byte, 32)
+var testMasterKey []byte
+
+func TestMain(m *testing.M) {
+	testMasterKey = testutil.RandMasterKey()
+	os.Exit(m.Run())
+}
 
 // TestScrubAllHealthy: every shard passes the hash check.
 func TestScrubAllHealthy(t *testing.T) {
@@ -109,14 +116,18 @@ func TestSilentRevive(t *testing.T) {
 	for _, a := range alice.Addrs() {
 		aliceAddrStrs = append(aliceAddrStrs, a.String())
 	}
-	_ = aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: []byte("pk")})
+	if err := aliceReg.Add(&buddy.Entry{PeerID: bob.ID().String(), PubKey: testutil.MarshaledPubKey(t, bob)}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
 
 	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
-	_ = bobReg.Add(&buddy.Entry{
+	if err := bobReg.Add(&buddy.Entry{
 		PeerID: alice.ID().String(),
-		PubKey: []byte("pk"),
+		PubKey: testutil.MarshaledPubKey(t, alice),
 		Addrs:  aliceAddrStrs,
-	})
+	}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
 
 	// Stores
 	aliceStore := buddy.NewStore(filepath.Join(dir, "alice_shards"))
