@@ -518,6 +518,17 @@ func runServe(args []string) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Start Kademlia DHT for Internet peer discovery + hole punching.
+	d, err := p2pmod.StartDHT(ctx, h)
+	if err != nil {
+		log.Printf("[serve] DHT start: %v (Internet buddies unavailable)", err)
+	} else {
+		defer d.Close()
+		// Try to reach all registered buddies (LAN addrs first, then DHT).
+		go p2pmod.DialAllBuddies(ctx, h, d, reg)
+	}
+
 	scrubpkg.New(bs, h, reg).Start(ctx, 6*time.Hour)
 
 	fmt.Printf("CerclBackup daemon running\n")
