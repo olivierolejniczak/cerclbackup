@@ -31,19 +31,32 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/chunker"
 	"github.com/cerclbackup/cerclbackup/internal/codec"
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
+	"github.com/cerclbackup/cerclbackup/internal/emailinvite"
+	"github.com/cerclbackup/cerclbackup/internal/identity"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
-	"github.com/cerclbackup/cerclbackup/internal/emailinvite"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
-	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 	"github.com/multiformats/go-multiaddr"
 )
+
+// Thin wrappers so the identity package functions are accessible inside main
+// without repeating the import path in each function body.
+const identitySeedKeyName = identity.KeyName
+
+func identityMnemonicFromSeed(seed []byte) (string, error) {
+	return identity.MnemonicFromSeed(seed)
+}
+
+func identitySeedFromMnemonic(mnemonic string) ([]byte, error) {
+	return identity.SeedFromMnemonic(mnemonic)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -74,6 +87,10 @@ func main() {
 		runRevoke(os.Args[2:])
 	case "rebalance":
 		runRebalance(os.Args[2:])
+	case "show-phrase":
+		runShowPhrase(os.Args[2:])
+	case "recover":
+		runRecover(os.Args[2:])
 	default:
 		usage()
 		os.Exit(1)
@@ -896,6 +913,79 @@ func rebalanceWithKeystore(ks *bbcrypto.Keystore, password string) {
 			fmt.Printf("    - %s\n", e)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2g -- Recovery phrase: show-phrase / recover
+// ---------------------------------------------------------------------------
+
+func runShowPhrase(args []string) {
+	fs := flag.NewFlagSet("show-phrase", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	_ = fs.Parse(args)
+	if *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatalf("show-phrase: %v", err)
+	}
+
+	seed := ks.LoadExtra(identitySeedKeyName)
+	if len(seed) == 0 {
+		log.Fatal("show-phrase: this keystore has no identity seed (created before Phase 2g). " +
+			"Your peer identity cannot be recovered by phrase. " +
+			"Back up your keystore file directly.")
+	}
+
+	mnemonic, err := identityMnemonicFromSeed(seed)
+	if err != nil {
+		log.Fatalf("show-phrase: %v", err)
+	}
+
+	fmt.Println("Your 12-word recovery phrase (write this down in a safe place):")
+	fmt.Println()
+	fmt.Println(" ", mnemonic)
+	fmt.Println()
+	fmt.Println("Anyone with this phrase can restore your CerclBackup identity.")
+}
+
+func runRecover(args []string) {
+	fs := flag.NewFlagSet("recover", flag.ExitOnError)
+	phrase := fs.String("phrase", "", "12-word recovery phrase (required)")
+	password := fs.String("password", "", "New keystore password (required)")
+	_ = fs.Parse(args)
+	if *phrase == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	seed, err := identitySeedFromMnemonic(*phrase)
+	if err != nil {
+		log.Fatalf("recover: %v", err)
+	}
+
+	// Create a fresh keystore at the default location.
+	ksPath := bbcrypto.DefaultKeystorePath()
+	ks := bbcrypto.NewKeystore(ksPath)
+	if err := ks.Create(*password); err != nil {
+		log.Fatalf("recover: create keystore: %v", err)
+	}
+
+	priv, err := p2pmod.EnsurePeerIdentityFromSeed(ks, seed, *password)
+	if err != nil {
+		log.Fatalf("recover: derive identity: %v", err)
+	}
+
+	peerID, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		log.Fatalf("recover: peer ID: %v", err)
+	}
+
+	fmt.Printf("Identity restored successfully.\nPeer ID: %s\n", peerID)
+	fmt.Println("Run `cerclbackup serve` to reconnect with your buddies.")
 }
 
 // ---------------------------------------------------------------------------
