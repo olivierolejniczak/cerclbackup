@@ -3,9 +3,10 @@ package wire
 
 // Protocol IDs for libp2p stream multiplexing.
 const (
-	ProtoPush   = "/cerclbackup/push/1.0.0"
-	ProtoPull   = "/cerclbackup/pull/1.0.0"
-	ProtoInvite = "/cerclbackup/invite/1.0.0"
+	ProtoPush     = "/cerclbackup/push/1.0.0"
+	ProtoPull     = "/cerclbackup/pull/1.0.0"
+	ProtoInvite   = "/cerclbackup/invite/1.0.0"
+	ProtoManifest = "/cerclbackup/manifest/1.0.0"
 
 	// ProtoShard is an alias for ProtoPush kept for compatibility.
 	ProtoShard = ProtoPush
@@ -17,8 +18,12 @@ const (
 	TypeShardAck      = "shard_ack"
 	TypeShardRequest  = "shard_request"
 	TypeShardResponse = "shard_response"
-	TypeInviteRequest  = "invite_request"
-	TypeInviteResponse = "invite_response"
+	TypeInviteRequest    = "invite_request"
+	TypeInviteResponse   = "invite_response"
+	TypeManifestPush     = "manifest_push"
+	TypeManifestAck      = "manifest_ack"
+	TypeManifestRequest  = "manifest_request"
+	TypeManifestResponse = "manifest_response"
 )
 
 // ShardPush is sent from a backup owner to a buddy to store one shard.
@@ -73,4 +78,33 @@ type InviteResponse struct {
 	PeerID string `json:"peer_id,omitempty"`
 	PubKey []byte `json:"pub_key,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// ManifestPush delivers the owner's AES-256-GCM encrypted manifest blob to a buddy.
+// The blob is opaque to the buddy — it cannot decrypt it without the master key.
+type ManifestPush struct {
+	Type    string `json:"type"`
+	OwnerID string `json:"owner_id"`
+	Data    []byte `json:"data"`
+}
+
+// ManifestAck is the buddy's confirmation of a received manifest blob.
+type ManifestAck struct {
+	Type  string `json:"type"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+}
+
+// ManifestRequest asks a buddy to return the stored manifest for OwnerID.
+type ManifestRequest struct {
+	Type    string `json:"type"`
+	OwnerID string `json:"owner_id"`
+}
+
+// ManifestResponse carries the manifest blob (or Found=false if not stored).
+type ManifestResponse struct {
+	Type    string `json:"type"`
+	OwnerID string `json:"owner_id"`
+	Found   bool   `json:"found"`
+	Data    []byte `json:"data,omitempty"`
 }

@@ -143,6 +143,31 @@ func (s *Store) ListAll() ([]ShardRef, error) {
 	return refs, err
 }
 
+// PutManifest stores an encrypted manifest blob for ownerID.
+// The path is <root>/remote/<ownerID>/manifest.enc.
+func (s *Store) PutManifest(ownerID string, data []byte) error {
+	dir := filepath.Join(s.root, "remote", ownerID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("store: mkdir %s: %w", dir, err)
+	}
+	p := filepath.Join(dir, "manifest.enc")
+	return os.WriteFile(p, data, 0600)
+}
+
+// GetManifest retrieves the encrypted manifest blob for ownerID, or returns
+// an error if no manifest has been stored yet.
+func (s *Store) GetManifest(ownerID string) ([]byte, error) {
+	p := filepath.Join(s.root, "remote", ownerID, "manifest.enc")
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("store: no manifest for %s", ownerID)
+		}
+		return nil, fmt.Errorf("store: read manifest: %w", err)
+	}
+	return data, nil
+}
+
 // splitPath splits a filepath into its slash-separated components.
 func splitPath(p string) []string {
 	p = filepath.ToSlash(p)
