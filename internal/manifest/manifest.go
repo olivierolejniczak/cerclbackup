@@ -107,6 +107,20 @@ func (m *Manifest) Save() error {
 	return nil
 }
 
+// EncryptedBytes returns the encrypted manifest blob that Save() would write to
+// disk, without performing any I/O.  Use this to push the manifest to buddies
+// after a backup without requiring a second disk write.
+func (m *Manifest) EncryptedBytes() ([]byte, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	plaintext, err := json.Marshal(m.d)
+	if err != nil {
+		return nil, fmt.Errorf("manifest: marshal: %w", err)
+	}
+	return bbcrypto.Encrypt(m.masterKey, plaintext)
+}
+
 // Upsert creates or replaces the entry for the given file path.
 // contentHash must be the same hash used to derive the store fileID (fileHashFromChunks).
 func (m *Manifest) Upsert(srcPath string, contentHash [32]byte, size int64, scheme protocol.RSScheme, shards []protocol.ShardLocation) (*protocol.ManifestEntry, error) {

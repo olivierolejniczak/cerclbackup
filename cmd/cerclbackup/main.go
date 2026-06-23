@@ -34,6 +34,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/emailinvite"
 	"github.com/cerclbackup/cerclbackup/internal/identity"
 	"github.com/cerclbackup/cerclbackup/internal/invite"
+	"github.com/cerclbackup/cerclbackup/internal/manifdist"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
@@ -87,6 +88,8 @@ func main() {
 		runRevoke(os.Args[2:])
 	case "rebalance":
 		runRebalance(os.Args[2:])
+	case "manifest-pull":
+		runManifestPull(os.Args[2:])
 	case "show-phrase":
 		runShowPhrase(os.Args[2:])
 	case "recover":
@@ -205,6 +208,24 @@ func runBackup(args []string) {
 
 	// -- 7. Push shards to buddies (Phase 2b) -----------------------------------------------
 	pushToBuddies(ks, *password, fileIDFromHash(fileHash), shardLocations, store)
+
+	// -- 8. Push encrypted manifest to connected buddies (Phase 2i) -------------------------
+	blob, err := mf.EncryptedBytes()
+	if err != nil {
+		log.Printf("[backup] manifest encrypt: %v (skipping buddy push)", err)
+	} else {
+		priv, err := p2pmod.EnsurePeerIdentity(ks, *password)
+		if err == nil {
+			h, err := p2pmod.NewHost(priv, 0)
+			if err == nil {
+				defer h.Close()
+				n := manifdist.PushToAll(context.Background(), h, h.ID().String(), blob)
+				if n > 0 {
+					log.Printf("[backup] manifest pushed to %d buddy/buddies", n)
+				}
+			}
+		}
+	}
 }
 
 // ─── RESTORE ─────────────────────────────────────────────────────────────────
@@ -924,6 +945,70 @@ func rebalanceWithKeystore(ks *bbcrypto.Keystore, password string) {
 			fmt.Printf("    - %s\n", e)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2i -- Distributed manifest: manifest-pull
+// ---------------------------------------------------------------------------
+
+// runManifestPull fetches the encrypted manifest from a buddy and writes it
+// to the default local manifest path, overwriting any existing file.
+// Used when the owner's machine is replaced and the local manifest is lost.
+func runManifestPull(args []string) {
+	fs := flag.NewFlagSet("manifest-pull", flag.ExitOnError)
+	buddyAddr := fs.String("addr", "", "Buddy multiaddr (required, e.g. /ip4/1.2.3.4/tcp/7742/p2p/<peerID>)")
+	password := fs.String("password", "", "Keystore password (required)")
+	out := fs.String("out", manifest.DefaultManifestPath(), "Output path for recovered manifest")
+	_ = fs.Parse(args)
+	if *buddyAddr == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Fatalf("manifest-pull: %v", err)
+	}
+
+	priv, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatalf("manifest-pull: peer identity: %v", err)
+	}
+
+	h, err := p2pmod.NewHost(priv, 0)
+	if err != nil {
+		log.Fatalf("manifest-pull: host: %v", err)
+	}
+	defer h.Close()
+
+	ma, err := multiaddr.NewMultiaddr(*buddyAddr)
+	if err != nil {
+		log.Fatalf("manifest-pull: parse addr %q: %v", *buddyAddr, err)
+	}
+	pi, err := peer.AddrInfoFromP2pAddr(ma)
+	if err != nil {
+		log.Fatalf("manifest-pull: addr info: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := h.Connect(ctx, *pi); err != nil {
+		log.Fatalf("manifest-pull: connect to buddy: %v", err)
+	}
+
+	blob, err := manifdist.PullFromBuddy(ctx, h, pi.ID, h.ID().String())
+	if err != nil {
+		log.Fatalf("manifest-pull: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(*out), 0700); err != nil {
+		log.Fatalf("manifest-pull: mkdir: %v", err)
+	}
+	if err := os.WriteFile(*out, blob, 0600); err != nil {
+		log.Fatalf("manifest-pull: write: %v", err)
+	}
+	fmt.Printf("Manifest recovered from buddy %s → %s (%d bytes)\n", pi.ID, *out, len(blob))
 }
 
 // ---------------------------------------------------------------------------

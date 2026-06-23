@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -25,6 +26,9 @@ func RegisterHandlers(h host.Host, reg *buddy.Registry, bs *buddy.Store, invMgr 
 	})
 	h.SetStreamHandler(wire.ProtoInvite, func(s network.Stream) {
 		handleInvite(s, h, reg, invMgr)
+	})
+	h.SetStreamHandler(wire.ProtoManifest, func(s network.Stream) {
+		handleManifest(s, reg, bs)
 	})
 }
 
@@ -238,5 +242,75 @@ func SendInviteRequest(ctx context.Context, h host.Host, reg *buddy.Registry,
 		PeerID: resp.PeerID,
 		PubKey: resp.PubKey,
 	})
+}
+
+// handleManifest serves both ManifestPush (store) and ManifestRequest (retrieve)
+// on ProtoManifest.  The first message type field determines the operation.
+func handleManifest(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
+	defer s.Close()
+
+	remotePeer := s.Conn().RemotePeer()
+	if !checkBuddyAuth(reg, remotePeer) {
+		log.Printf("[manifest] unauthenticated peer %s — rejected", remotePeer)
+		return
+	}
+
+	// Read raw bytes once so we can inspect Type and then re-unmarshal.
+	raw, err := wire.ReadRawMsg(s)
+	if err != nil {
+		log.Printf("[manifest] read from %s: %v", remotePeer, err)
+		return
+	}
+
+	var env struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		log.Printf("[manifest] unmarshal envelope from %s: %v", remotePeer, err)
+		return
+	}
+
+	switch env.Type {
+	case wire.TypeManifestPush:
+		var push wire.ManifestPush
+		if err := json.Unmarshal(raw, &push); err != nil {
+			log.Printf("[manifest] unmarshal push from %s: %v", remotePeer, err)
+			_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: false, Error: "decode error"})
+			return
+		}
+		if err := bs.PutManifest(push.OwnerID, push.Data); err != nil {
+			log.Printf("[manifest] store manifest for %s: %v", push.OwnerID, err)
+			_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: false, Error: err.Error()})
+			return
+		}
+		log.Printf("[manifest] stored manifest for owner %s from %s (%d bytes)", push.OwnerID, remotePeer, len(push.Data))
+		_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: true})
+
+	case wire.TypeManifestRequest:
+		var req wire.ManifestRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			log.Printf("[manifest] unmarshal request from %s: %v", remotePeer, err)
+			return
+		}
+		data, err := bs.GetManifest(req.OwnerID)
+		if err != nil {
+			_ = wire.WriteMsg(s, wire.ManifestResponse{
+				Type:    wire.TypeManifestResponse,
+				OwnerID: req.OwnerID,
+				Found:   false,
+			})
+			return
+		}
+		log.Printf("[manifest] served manifest for owner %s to %s", req.OwnerID, remotePeer)
+		_ = wire.WriteMsg(s, wire.ManifestResponse{
+			Type:    wire.TypeManifestResponse,
+			OwnerID: req.OwnerID,
+			Found:   true,
+			Data:    data,
+		})
+
+	default:
+		log.Printf("[manifest] unknown message type %q from %s", env.Type, remotePeer)
+	}
 }
 
