@@ -15,6 +15,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -72,6 +73,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "init":
+		os.Exit(runInit(os.Args[2:]))
 	case "backup":
 		runBackup(os.Args[2:])
 	case "restore":
@@ -149,16 +152,21 @@ Commands (Phase 3 -- multi-circle & versioning):
 
 func runBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
-	src      := fs.String("src", "", "Source file to back up")
-	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
-	password := fs.String("password", "", "Encryption password")
-	buddies  := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
-	excl     := fs.String("exclude", "", "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
+	src        := fs.String("src", "", "Source file to back up")
+	storeDir   := fs.String("store", storage.DefaultStorePath(), "Store directory")
+	password   := fs.String("password", "", "Encryption password")
+	buddies    := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
+	excl       := fs.String("exclude", "", "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
+	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
 	_ = fs.Parse(args)
 
 	if *src == "" || *password == "" {
 		fs.Usage()
 		os.Exit(1)
+	}
+
+	if *uploadKbps > 0 {
+		p2pmod.SetUploadRate(*uploadKbps * 1024)
 	}
 
 	if *excl != "" {
@@ -600,14 +608,18 @@ func openInviteManager() *invite.Manager {
 
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	password := fs.String("password", "", "keystore password (required)")
-	port := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
+	password   := fs.String("password", "", "keystore password (required)")
+	port       := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
+	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
 	if *password == "" {
 		fs.Usage()
 		os.Exit(1)
+	}
+	if *uploadKbps > 0 {
+		p2pmod.SetUploadRate(*uploadKbps * 1024)
 	}
 
 	ks, err := openKeystore(*password)
@@ -1345,6 +1357,135 @@ func runJoinEmail(args []string) {
 
 func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
+}
+
+// ── runInit ──────────────────────────────────────────────────────────────────
+
+func runInit(args []string) int {
+	fs := flag.NewFlagSet("init", flag.ExitOnError)
+	password  := fs.String("password", "", "Keystore password (skips interactive prompt)")
+	noPrompt  := fs.Bool("no-prompt", false, "Skip all interactive prompts (for scripted use)")
+	storeDir  := fs.String("store", storage.DefaultStorePath(), "Shard store directory to create")
+	_ = fs.Parse(args)
+
+	// ── 1. Password ──────────────────────────────────────────────────────────
+	pw := *password
+	if pw == "" {
+		if *noPrompt {
+			fmt.Fprintln(os.Stderr, "init: --password is required when --no-prompt is set")
+			return 1
+		}
+		var err error
+		pw, err = promptPassword("Choose a keystore password: ")
+		if err != nil {
+			log.Printf("init: password prompt: %v", err)
+			return 1
+		}
+		confirm, err := promptPassword("Confirm password: ")
+		if err != nil {
+			log.Printf("init: confirm prompt: %v", err)
+			return 1
+		}
+		if pw != confirm {
+			fmt.Fprintln(os.Stderr, "Passwords do not match.")
+			return 1
+		}
+	}
+
+	// ── 2. Create keystore ───────────────────────────────────────────────────
+	cfgDir, err := os.UserConfigDir()
+	if err != nil {
+		log.Printf("init: config dir: %v", err)
+		return 1
+	}
+	ksDir := filepath.Join(cfgDir, "cerclbackup")
+	if err := os.MkdirAll(ksDir, 0o700); err != nil {
+		log.Printf("init: mkdir: %v", err)
+		return 1
+	}
+	ksPath := filepath.Join(ksDir, "keystore.enc")
+
+	ks := bbcrypto.NewKeystore(ksPath)
+	if err := ks.Create(pw); err != nil {
+		log.Printf("init: create keystore: %v", err)
+		return 1
+	}
+
+	// ── 3. Generate peer identity ────────────────────────────────────────────
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, pw)
+	if err != nil {
+		log.Printf("init: peer identity: %v", err)
+		return 1
+	}
+	peerID, err := peer.IDFromPrivateKey(privKey)
+	if err != nil {
+		log.Printf("init: peer id: %v", err)
+		return 1
+	}
+
+	// ── 4. Show recovery phrase ───────────────────────────────────────────────
+	seedBytes := ks.LoadExtra(identity.KeyName)
+	phrase := ""
+	if len(seedBytes) > 0 {
+		phrase, err = identity.MnemonicFromSeed(seedBytes)
+		if err != nil {
+			log.Printf("init: mnemonic: %v", err)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("╔══════════════════════════════════════════════════════════╗")
+	fmt.Println("║           CerclBackup — First-Run Setup                  ║")
+	fmt.Println("╚══════════════════════════════════════════════════════════╝")
+	fmt.Println()
+	fmt.Printf("Peer ID : %s\n", peerID)
+	fmt.Println()
+
+	if phrase != "" {
+		fmt.Println("Recovery phrase (write this down — it restores your identity):")
+		fmt.Println()
+		fmt.Printf("  %s\n", phrase)
+		fmt.Println()
+		if !*noPrompt {
+			fmt.Print("Press Enter once you have written down the phrase... ")
+			bufio.NewReader(os.Stdin).ReadString('\n')
+		}
+	}
+
+	// ── 5. Create Default circle ─────────────────────────────────────────────
+	mgr := circle.NewManager(ks, pw)
+	if _, err := mgr.GetOrDefault("", pw); err != nil {
+		log.Printf("init: create default circle: %v", err)
+		return 1
+	}
+
+	// ── 6. Create store directory ─────────────────────────────────────────────
+	if err := os.MkdirAll(*storeDir, 0o700); err != nil {
+		log.Printf("init: store dir: %v", err)
+		return 1
+	}
+
+	// ── 7. Summary ────────────────────────────────────────────────────────────
+	fmt.Println("Setup complete.")
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  cerclbackup backup  --src <file>  --password <pw>")
+	fmt.Println("  cerclbackup watch   --src <dir>   --password <pw>")
+	fmt.Println("  cerclbackup invite  --buddy-addr <multiaddr> --password <pw>")
+	fmt.Printf("\nKeystore : %s\n", ksPath)
+	fmt.Printf("Store    : %s\n", *storeDir)
+	return 0
+}
+
+// promptPassword reads a password from stdin without echoing it.
+// Falls back to plain line read when running under a test harness
+// that is not a real TTY.
+func promptPassword(prompt string) (string, error) {
+	fmt.Print(prompt)
+	// Try syscall-level no-echo read; fall back to plain line if not a TTY.
+	pw, err := readPassword()
+	fmt.Println()
+	return pw, err
 }
 
 // ── runPrune ────────────────────────────────────────────────────────────────
