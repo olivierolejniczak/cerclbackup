@@ -17,15 +17,17 @@ package main
 import (
 	"bufio"
 	"context"
-	"sync"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -422,6 +424,9 @@ func runRestore(args []string) {
 	must(err)
 	defer outFile.Close()
 
+	// Accumulate chunk hashes to recompute the file's Merkle hash for verification.
+	verifyHasher := sha256.New()
+
 	for ci := 0; ci < numChunks; ci++ {
 		// Collect and decrypt the shards for this original chunk.
 		rawShards := make([][]byte, shardsPerChunk)
@@ -479,9 +484,25 @@ func runRestore(args []string) {
 			}
 		}
 
+		chunkHash := sha256.Sum256(chunkData)
+		verifyHasher.Write(chunkHash[:])
+
 		if _, err := outFile.Write(chunkData); err != nil {
 			log.Fatalf("[restore] write chunk %d: %v", ci, err)
 		}
+	}
+
+	// Integrity verification: recompute the Merkle hash and compare to entry.Hash.
+	if entry.Hash != "" {
+		var gotHash [32]byte
+		copy(gotHash[:], verifyHasher.Sum(nil))
+		gotHex := hex.EncodeToString(gotHash[:])
+		if gotHex != entry.Hash {
+			outFile.Close()
+			os.Remove(*out)
+			log.Fatalf("[restore] INTEGRITY CHECK FAILED: hash mismatch (corrupted data, output deleted)")
+		}
+		log.Printf("[restore] integrity check passed")
 	}
 
 	log.Printf("[restore] ✅ restored to %q", *out)
@@ -639,6 +660,7 @@ func runServe(args []string) {
 	password   := fs.String("password", "", "keystore password (required)")
 	port       := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
 	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
+	healthAddr := fs.String("health-addr", "127.0.0.1:7743", "HTTP health/metrics endpoint address (empty = disabled)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -698,10 +720,57 @@ func runServe(args []string) {
 
 	scrubpkg.New(bs, h, reg).Start(ctx, 6*time.Hour)
 
+	serveStart := time.Now()
+
+	// Optional HTTP health / metrics endpoint.
+	if *healthAddr != "" {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			peers := len(h.Network().Peers())
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    "ok",
+				"version":   version.AppVersion,
+				"peer_id":   h.ID().String(),
+				"peers":     peers,
+				"uptime_s":  int(time.Since(serveStart).Seconds()),
+			})
+		})
+		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			uptime := int(time.Since(serveStart).Seconds())
+			peers := len(h.Network().Peers())
+			buddies := reg.List()
+			shards, _ := bs.ListAll()
+			fmt.Fprintf(w, "# HELP cerclbackup_uptime_seconds Seconds since daemon start\n")
+			fmt.Fprintf(w, "cerclbackup_uptime_seconds %d\n", uptime)
+			fmt.Fprintf(w, "# HELP cerclbackup_peers_connected Connected libp2p peers\n")
+			fmt.Fprintf(w, "cerclbackup_peers_connected %d\n", peers)
+			fmt.Fprintf(w, "# HELP cerclbackup_buddies_registered Registered buddy count\n")
+			fmt.Fprintf(w, "cerclbackup_buddies_registered %d\n", len(buddies))
+			fmt.Fprintf(w, "# HELP cerclbackup_shards_stored Shard files on disk\n")
+			fmt.Fprintf(w, "cerclbackup_shards_stored %d\n", len(shards))
+		})
+		srv := &http.Server{Addr: *healthAddr, Handler: mux}
+		go func() {
+			log.Printf("[serve] health endpoint: http://%s/health", *healthAddr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("[serve] health server: %v", err)
+			}
+		}()
+		go func() {
+			<-ctx.Done()
+			srv.Close()
+		}()
+	}
+
 	fmt.Printf("CerclBackup daemon running\n")
 	fmt.Printf("Peer ID : %s\n", h.ID())
 	for _, a := range h.Addrs() {
 		fmt.Printf("Address : %s/p2p/%s\n", a, h.ID())
+	}
+	if *healthAddr != "" {
+		fmt.Printf("Health  : http://%s/health\n", *healthAddr)
 	}
 
 	<-ctx.Done()
