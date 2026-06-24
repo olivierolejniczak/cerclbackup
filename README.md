@@ -1,258 +1,305 @@
 # CerclBackup
 
-Sauvegarde P2P chiffrée entre personnes de confiance.
+P2P encrypted backup between trusted friends — no cloud service, no subscription, no single point of failure.
+
+Your files are split into chunks, compressed with zstd, protected by Reed-Solomon erasure coding, encrypted with AES-256-GCM, and distributed to buddies over libp2p. Recovery works as long as a minimum quorum of buddies is reachable.
+
+> **AGPL-3.0** — any SaaS built on this must publish its source code.
 
 ---
 
-## Objectif
-
-La grande majorité des solutions de sauvegarde repose sur un tiers : un service cloud qui stocke vos données, un éditeur qui contrôle les clés, une infrastructure qui peut être compromise, revendue, ou coupée du jour au lendemain.
-
-CerclBackup part d'une prémisse différente : **vous avez déjà les ressources pour sauvegarder vos données sans intermédiaire**. Vos proches — famille, amis, collègues de confiance — ont tous des disques durs avec de l'espace libre. Vous pouvez stocker des fragments de leurs fichiers, ils peuvent stocker des fragments des vôtres. C'est de la réciprocité, pas un service.
-
-Le projet répond à trois questions concrètes :
-
-- **Comment stocker ses fichiers chez ses proches sans qu'ils puissent les lire ?** → Chiffrement AES-256-GCM côté client, avant tout envoi. Personne d'autre que vous ne détient la clé.
-- **Comment garantir la récupération même si plusieurs buddies disparaissent ?** → Reed-Solomon : un code correcteur d'erreurs qui reconstruit les données à partir d'un sous-ensemble de fragments.
-- **Comment organiser cela sans infrastructure centralisée ?** → libp2p : protocole P2P utilisé par IPFS et Ethereum, sans serveur de coordination.
-
-CerclBackup cible en priorité les **TPE/PME et familles** qui veulent reprendre le contrôle de leurs données sans compétences techniques avancées, et les **praticiens IT** qui déploient pour des tiers et ont besoin d'un outil auditable et sans dépendance cloud.
-
----
-
-## Choix éthiques
-
-### Pas de serveur central, pas de tiers de confiance
-
-Il n'existe aucun serveur CerclBackup. Aucune entité ne stocke vos données, ne connaît vos buddies, ne peut être contrainte de livrer vos fichiers à un tiers. Le réseau n'existe que dans les connexions directes entre les pairs.
-
-### Les fragments sont mathématiquement inutilisables seuls
-
-Un buddy qui stocke vos shards ne peut pas les lire — pas parce qu'on lui fait confiance pour ne pas regarder, mais parce que chaque fragment est chiffré avec une clé dérivée que lui seul ne possède pas. Même s'il regroupait tous les fragments qu'il stocke, il n'obtiendrait que du bruit chiffré.
-
-### Réciprocité, pas abonnement
-
-Vous stockez pour vos buddies, ils stockent pour vous. Il n'y a pas d'argent, pas de tokens, pas de marketplace. Si la relation de confiance cesse, vous révoquez le buddy et les shards sont redistribués. Le modèle économique de CerclBackup ne peut pas reposer sur la captation de vos données parce qu'il ne les détient pas.
-
-### AGPL-3.0 : copyleft fort
-
-La licence n'est pas MIT ou Apache par choix délibéré. L'AGPL-3.0 impose que tout service SaaS construit sur CerclBackup publie son code source. Cela ferme la porte à un acteur commercial qui voudrait privatiser le code, le transformer en service fermé, et revendre l'accès à vos données. Si quelqu'un améliore CerclBackup, ces améliorations doivent rester ouvertes.
-
-### Zéro télémétrie
-
-CerclBackup ne contacte aucun serveur externe. Il n'y a pas d'analytique, pas de ping de démarrage, pas d'envoi de statistiques d'usage. Ce qui se passe sur votre machine reste sur votre machine.
-
----
-
-## Choix technologiques et leurs justifications
-
-### Reed-Solomon plutôt que la réplication simple
-
-La réplication naïve ("j'ai deux copies") crée un overhead de 100% pour tolérer une seule panne. Reed-Solomon permet de tolérer *n* pannes avec un overhead bien inférieur, et offre une **garantie mathématique** de reconstruction — pas une probabilité.
-
-Avec un schéma 3/2 (3 données + 2 parités) : 5 buddies, 2 défaillances tolérées, overhead de 67%. Avec de la réplication simple pour le même niveau de tolérance : il faudrait 3 copies complètes, soit 200% d'overhead.
-
-Reed-Solomon est obligatoire dans CerclBackup — il n'existe pas de mode "miroir simple" parce que cela donnerait une fausse impression de sécurité avec une efficacité moindre.
-
-### Chiffrement par shard, pas par fichier
-
-Chaque fragment reçoit une clé dérivée via HKDF de la forme `HKDF(masterKey, fileID || shardIndex)`. Cela a deux conséquences :
-
-1. Un buddy qui stocke deux fragments différents du même fichier ne peut pas savoir qu'ils appartiennent au même fichier (les clés sont différentes).
-2. La compromission d'une clé de shard ne compromet pas les autres shards.
-
-Le chiffrement est AES-256-GCM : authentifié (l'intégrité est vérifiée au déchiffrement), standard (auditables par des tiers), et résistant aux attaques actives.
-
-### libp2p plutôt qu'un protocole maison
-
-libp2p est le socle réseau d'IPFS et de plusieurs blockchains. Il gère l'identité des pairs (Ed25519), le multiplexage de protocoles, la traversée NAT, et le chiffrement de transport. Écrire un protocole P2P correct depuis zéro est un effort de plusieurs années — libp2p résout ces problèmes de façon battle-tested.
-
-### mDNS TOFU plutôt que DHT
-
-Le DHT Kademlia (la table de routage décentralisée) permettrait de trouver des pairs inconnus sur Internet. C'est précisément ce que CerclBackup ne veut pas. Le modèle de confiance est basé sur des relations préexistantes : vous ne voulez pas que votre machine contacte des inconnus.
-
-mDNS découvre automatiquement les buddies déjà connus sur le réseau local (LAN) sans DHT, sans serveur de rendezvous, sans contacter qui que ce soit d'externe. La connexion ne s'établit que si le pair détecté figure déjà dans le registre de buddies — TOFU (Trust On First Use) sur invitation explicite.
-
-### BIP39 pour les codes d'invitation
-
-Les codes BIP39 (listes de mots utilisées pour les portefeuilles Bitcoin) sont conçus pour être pronounçables, partageables à l'oral, et résistants aux erreurs de transcription. Un code d'invitation CerclBackup peut être lu à voix haute au téléphone. C'est un choix d'accessibilité autant que de sécurité.
-
-### Double canal pour l'invitation par email (Phase 2f)
-
-L'invitation classique via code BIP39 suppose un canal sécurisé (Signal, QR code en face-à-face). L'email n'est pas un canal sécurisé. CerclBackup résout ce problème avec un schéma de commitment :
-
-- **Canal email (public)** : payload signé Ed25519 contenant l'engagement cryptographique `C = SHA-256(S)` — lisible par n'importe qui, ne révèle rien.
-- **Canal hors-bande (SMS, Signal, voix)** : les 12 mots BIP39 encodant le secret `S`.
-
-Le joiner doit avoir les deux pour procéder. Intercepter l'email ne suffit pas. Intercepter le SMS ne suffit pas. C'est un MFA sur deux canaux de nature différente.
-
-### Ed25519 plutôt que RSA
-
-Clés 32 fois plus courtes, signatures déterministes (pas de side-channel par aléa de signature), pas d'attaque par oracle de padding, génération rapide. Ed25519 est devenu le standard de facto pour les systèmes P2P modernes.
-
-### Argon2id pour le keystore
-
-Le mot de passe maître dérive les clés via Argon2id (vainqueur de la Password Hashing Competition 2015). Argon2id est memory-hard : un attaquant avec du matériel GPU massif n'a pas d'avantage significatif par rapport à une machine ordinaire. C'est une protection concrète contre les attaques par dictionnaire sur le fichier keystore.
-
-### Scrub proactif + Silent Revive
-
-La plupart des systèmes de backup détectent la corruption au moment de la restauration — c'est-à-dire le pire moment possible. CerclBackup vérifie l'intégrité des shards stockés périodiquement (SHA-256 comparé à un sidecar créé à l'écriture). Si un shard est corrompu, il est silencieusement refetché depuis le propriétaire et réécrit — sans intervention humaine, avant que la corruption ne devienne un problème.
-
-### Queue offline
-
-Un buddy n'a pas besoin d'être en ligne au moment de la sauvegarde. Les shards non livrés sont mis en queue chiffrée sur disque. Quand le buddy revient en ligne (détecté par mDNS), la queue est vidée automatiquement. La sauvegarde ne bloque jamais sur la disponibilité d'un pair.
-
----
-
-## Prérequis
+## How it works
 
 ```
-Go 1.22 ou supérieur
+  Your machine                                   Buddy A           Buddy B
+  ┌──────────┐  chunk   zstd    Reed-Solomon     ┌──────────┐      ┌──────────┐
+  │  file    │────────────────────────────────►  │ shard-0  │      │ shard-1  │
+  └──────────┘  ↓                                │ .enc     │      │ .enc     │
+          AES-256-GCM                            └──────────┘      └──────────┘
+          HKDF key per file                      Buddy C
+                                                 ┌──────────┐
+                                                 │ shard-2  │
+                                                 │ .enc     │  (parity)
+                                                 └──────────┘
 ```
+
+1. Files are chunked (4 MB), compressed (zstd), and encoded with Reed-Solomon (default 3+2).
+2. Each shard is encrypted with AES-256-GCM using a key derived per file via HKDF.
+3. Shards push to buddies over libp2p (mDNS on LAN, DHT on Internet, offline queue).
+4. The manifest (encrypted file index with full version history) is distributed to buddies.
+5. Restore works from any DataShards-of-TotalShards subset of online buddies.
+6. Every restore verifies the Merkle hash of reconstructed chunks against the manifest.
+
+---
+
+## Quick start
+
+```bash
+# 1. Initialise — generates Ed25519 identity, AES master key, 12-word recovery phrase
+cerclbackup init
+
+# 2. Connect two machines
+cerclbackup invite generate --name alice   # on machine A: outputs a token
+cerclbackup invite accept --token <TOKEN>  # on machine B: accepts and connects
+
+# 3. Back up a directory tree
+cerclbackup backup --src ~/Documents
+
+# 4. Restore a file (latest version)
+cerclbackup restore --file ~/Documents/report.pdf --out /tmp/report.pdf
+```
+
+---
 
 ## Installation
 
+### Pre-built Windows installer
+
+Download `CerclBackup-X.Y.Z.msi` from [Releases](../../releases) and run it.  
+The installer registers the systray binary to start at login and creates a Start Menu shortcut.
+
+### Build from source
+
+Requires **Go 1.21+**.
+
 ```bash
-git clone https://github.com/olivierolejniczak/cerclbackup
+git clone https://github.com/cerclbackup/cerclbackup
 cd cerclbackup
-go mod tidy
+go build ./cmd/cerclbackup/        # CLI daemon
+go build ./cmd/cerclbackup-tray/   # systray (GOOS=windows for cross-compile)
 ```
 
-## Compilation
+### Windows MSI (build)
+
+```powershell
+# Requires: dotnet tool install --global wix
+.\scripts\build-installer.ps1 -Version 1.0.0
+```
+
+---
+
+## Command reference
+
+### First run
+
+| Command | Description |
+|---|---|
+| `cerclbackup init` | Interactive wizard: generate keys, show BIP39 phrase, create Default circle |
+| `cerclbackup init --no-prompt` | Non-interactive (CI): reads password from `CERCLBACKUP_PASSWORD` env var |
+
+### Backup
+
+| Command | Description |
+|---|---|
+| `cerclbackup backup --src <dir>` | Back up all files in a directory |
+| `cerclbackup backup --src <dir> --exclude ".git,*.tmp"` | Exclude glob patterns (comma-separated) |
+| `cerclbackup backup --src <dir> --upload-kbps 500` | Cap upload bandwidth in KB/s |
+| `cerclbackup backup --src <dir> --auto-prune` | Apply retention policy after backup |
+| `cerclbackup watch --src <dir>` | fsnotify watcher — debounces changes and backs up automatically |
+| `cerclbackup watch --src <dir> --debounce 10s` | Override debounce interval (default 3s) |
+
+### Restore
+
+| Command | Description |
+|---|---|
+| `cerclbackup restore --file <path> --out <dst>` | Restore latest version of a file |
+| `cerclbackup restore --file <path> --version N --out <dst>` | Restore specific version number |
+| `cerclbackup restore --file-id <uuid> --out <dst>` | Restore by exact file ID (advanced) |
+
+Restore always verifies the Merkle hash of reconstructed chunks. A mismatch deletes the output and exits non-zero.
+
+### Listing and versioning
+
+| Command | Description |
+|---|---|
+| `cerclbackup list` | Latest version of every backed-up file |
+| `cerclbackup list --all` | Every version of every file |
+| `cerclbackup versions --file <path>` | All versions for a specific file with dates and sizes |
+| `cerclbackup diff --since 2026-01-01` | Files added or updated since a date (YYYY-MM-DD or RFC3339) |
+
+### Retention
+
+| Command | Description |
+|---|---|
+| `cerclbackup prune` | Apply default retention policy: 30d keep-all, 90d keep-weekly, monthly beyond |
+| `cerclbackup prune --dry-run` | Show what would be deleted without deleting |
+| `cerclbackup prune --max-versions 10` | Hard cap per file path |
+| `cerclbackup prune --keep-all-days 7 --keep-weekly-days 30` | Override retention windows |
+
+### Buddy management
+
+| Command | Description |
+|---|---|
+| `cerclbackup buddy status` | Check reachability of all registered buddies (parallel, exits 2 if any offline) |
+| `cerclbackup buddy list` | List registered buddies and their addresses |
+| `cerclbackup buddy add --addr <multiaddr>` | Manually register a buddy |
+| `cerclbackup buddy rm --peer-id <id>` | Remove a buddy |
+
+### Invite
+
+| Command | Description |
+|---|---|
+| `cerclbackup invite generate --name <name>` | Generate invite token (share the token to your buddy) |
+| `cerclbackup invite accept --token <token>` | Accept an invite and register the peer |
+
+### Circles
+
+Circles let you isolate key material across groups of buddies. Each circle uses an independent Argon2id-derived key so buddies in one circle cannot decrypt data from another.
+
+| Command | Description |
+|---|---|
+| `cerclbackup circle list` | List all circles |
+| `cerclbackup circle add --name <name> --scheme 3/2` | Create a circle with a specific RS scheme |
+| `cerclbackup circle rm --name <name> --confirm-name <name>` | Remove a circle (destructive, requires confirmation) |
+
+### Daemon
+
+| Command | Description |
+|---|---|
+| `cerclbackup serve` | Run background daemon: libp2p server, mDNS, DHT, scrub every 6h |
+| `cerclbackup serve --health-addr 127.0.0.1:7743` | Enable HTTP health and metrics endpoint |
+| `cerclbackup serve --upload-kbps 500` | Cap upload bandwidth |
+
+#### Health endpoint
+
+```
+GET /health  →  {"status":"ok","version":"1.0.0","peer_id":"12D3...","peers":3,"uptime_s":3600}
+GET /metrics →  Prometheus-style plaintext (cerclbackup_uptime_seconds, _peers_connected, _buddies_registered, _shards_stored)
+```
+
+### Maintenance
+
+| Command | Description |
+|---|---|
+| `cerclbackup doctor` | 7-check report: keystore, peer identity, store, manifest, last backup age, buddies, disk space |
+| `cerclbackup scrub` | Verify all locally-stored shards; attempts silent revival from owners if corrupt |
+| `cerclbackup audit` | Validate AES-GCM tags for every shard; detects orphans; exits 1 on corruption |
+| `cerclbackup storage` | Manifest stats, on-disk usage, and amplification ratio |
+
+### Import / export
+
+| Command | Description |
+|---|---|
+| `cerclbackup export --file-id <uuid> --out archive.cbk` | Export a backed-up file as a portable `.cbk` archive |
+| `cerclbackup import --in archive.cbk` | Import a `.cbk` archive into the local store |
+
+`.cbk` archives are gzip-compressed tarballs containing `manifest.json` and `shard-N.enc` entries. Shards remain AES-encrypted — the archive is confidential without additional wrapping.
+
+---
+
+## Reed-Solomon schemes
+
+| Scheme | Total buddies | Tolerated failures | Storage overhead |
+|---|---|---|---|
+| 2+1 | 3 | 1 | +50% |
+| 3+2 | 5 | 2 | +67% |
+| 5+3 | 8 | 3 | +60% |
+| 6+4 | 10 | 4 | +67% |
+
+---
+
+## Security model
+
+- **Client-side encryption.** The master key never leaves your machine; keystore is AES-256-GCM encrypted at rest with Argon2id key derivation from your password.
+- **Per-file key isolation.** Each file gets `HKDF(masterKey, fileID || shardIndex)` — a buddy holding multiple shards of the same file cannot link them.
+- **Zero-knowledge buddies.** Buddies store only unidentifiable encrypted blobs.
+- **Recovery phrase.** A 12-word BIP39 phrase regenerates the master key offline; write it down, keep it safe.
+- **Integrity on restore.** The Merkle hash (SHA-256 of chunk SHA-256s) is verified post-restore. Corrupted output is deleted before it can mislead.
+- **Proactive scrub.** Every 6 hours the daemon verifies shard integrity and silently revives corrupted shards from their owners — before a restore ever needs them.
+- **No telemetry.** The binary contacts no external server except the buddies you registered.
+
+---
+
+## Configuration
+
+State directory: `$XDG_CONFIG_HOME/cerclbackup/` (Linux/macOS) or `%APPDATA%\CerclBackup\` (Windows).
+
+| File / directory | Purpose |
+|---|---|
+| `keystore.enc` | Encrypted master key, peer identity, circle metadata |
+| `manifest.enc` | Encrypted file index with version history |
+| `buddies.json` | Registered peer addresses |
+| `shards/` | Shards stored on behalf of your buddies |
+| `queue.json` | Delivery queue for offline buddies |
+
+### Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `CERCLBACKUP_PASSWORD` | Keystore password (for CI, scripts, scheduled tasks) |
+| `CERCLBACKUP_SRC` | Source directory (used by the systray "Backup Now" action) |
+
+---
+
+## Windows Task Scheduler
+
+For always-on backup without the systray GUI:
+
+```powershell
+# Register: runs at logon + hourly, password stored in Credential Manager
+.\scripts\install-task.ps1 -SrcDir C:\Users\alice\Documents
+
+# Uninstall
+.\scripts\install-task.ps1 -Uninstall
+```
+
+---
+
+## Development
 
 ```bash
-# Linux / WSL2 (développement)
-go build -o build/cerclbackup ./cmd/cerclbackup
+# Unit tests (all packages)
+go test ./...
 
-# Windows 11 (cross-compilation)
-GOOS=windows GOARCH=amd64 go build -o build/cerclbackup.exe ./cmd/cerclbackup
+# Lint
+go vet ./...
 
-# NAS Synology/QNAP (ARM64)
-GOOS=linux GOARCH=arm64 go build -o build/cerclbackup-arm64 ./cmd/cerclbackup
+# End-to-end test (Linux)
+go build -o /tmp/cerclbackup ./cmd/cerclbackup/
+bash scripts/e2e_test.sh
 ```
 
-## Utilisation — CLI
+CI (GitHub Actions) runs on every push across Linux and Windows. Release MSIs are built automatically on `v*` tags.
 
-### Démarrer le daemon (écoute P2P + scrub + mDNS)
+---
 
-```bash
-cerclbackup serve --password <pwd>
-```
-
-### Inviter un buddy (code BIP39 à partager vocalement)
-
-```bash
-cerclbackup invite --password <pwd>
-# → affiche 12 mots à lire à votre buddy
-```
-
-### Inviter par email avec MFA hors-bande
-
-```bash
-cerclbackup invite-email \
-  --to ami@example.com \
-  --circle "Famille" \
-  --smtp-host smtp.gmail.com \
-  --smtp-user moi@gmail.com \
-  --smtp-pass "app-password" \
-  --password <pwd>
-# → envoie le payload par email
-# → affiche les 12 mots à partager par SMS/Signal/voix
-```
-
-### Rejoindre un cercle
-
-```bash
-# Via code BIP39
-cerclbackup join --peer-addr /ip4/192.168.1.10/tcp/4001/p2p/12D3K... \
-  --words "word1 word2 ... word12" --password <pwd>
-
-# Via email + code hors-bande
-cerclbackup join-email --payload invite.json \
-  --words "word1 word2 ... word12" --password <pwd>
-```
-
-### Sauvegarder un fichier
-
-```bash
-cerclbackup backup --src /chemin/vers/fichier.zip --password <pwd>
-```
-
-### Restaurer un fichier
-
-```bash
-cerclbackup restore --file-id <id> --out /chemin/sortie --password <pwd>
-```
-
-### Redistribuer après révocation d'un buddy
-
-```bash
-cerclbackup revoke --peer-id 12D3K... --password <pwd>
-# → supprime le buddy et rebalance automatiquement vers les buddies restants
-```
-
-## Lancer les tests
-
-```bash
-go test ./... -v
-```
-
-51 tests couvrant : pipeline RS+AES complet, push/pull P2P, file d'attente offline, scrub + silent revive, rebalance, mDNS, invitation BIP39 et email MFA.
-
-## Structure du projet
+## Project layout
 
 ```
 cerclbackup/
-├── cmd/cerclbackup/         # CLI — toutes les commandes
+├── cmd/
+│   ├── cerclbackup/          # CLI — all commands
+│   └── cerclbackup-tray/     # Windows systray binary
 ├── internal/
-│   ├── buddy/               # Registre des buddies + store des shards reçus
-│   ├── chunker/             # Découpage en chunks de 4 MB
-│   ├── codec/               # Reed-Solomon (klauspost/reedsolomon)
-│   ├── crypto/              # AES-256-GCM, HKDF, Argon2id, Keystore
-│   ├── emailinvite/         # Invitation email dual-canal (commitment + SMTP)
-│   ├── invite/              # Tokens BIP39, commitments email
-│   ├── manifest/            # Index chiffré des sauvegardes
-│   ├── p2p/                 # libp2p : host, handlers, push/pull, queue, mDNS
-│   ├── rebalance/           # Redistribution des shards après révocation
-│   ├── scrub/               # Vérification périodique + silent revive
-│   ├── storage/             # Store local des shards du propriétaire
-│   └── watcher/             # Surveillance fsnotify (prévu Phase 3)
+│   ├── archive/              # .cbk portable archive format
+│   ├── buddy/                # Buddy registry + shard store
+│   ├── chunker/              # 4 MB chunker with hash
+│   ├── circle/               # Multi-circle key isolation (Argon2id per circle)
+│   ├── codec/                # Reed-Solomon (klauspost/reedsolomon)
+│   ├── compress/             # zstd compression (singleton encoder/decoder)
+│   ├── crypto/               # AES-256-GCM, HKDF, Argon2id, keystore
+│   ├── emailinvite/          # Email invite (dual-channel: payload + OOB words)
+│   ├── exclude/              # Glob exclusion filter
+│   ├── identity/             # BIP39 recovery phrase generation
+│   ├── invite/               # Invite token lifecycle
+│   ├── manifdist/            # Manifest distribution to buddies
+│   ├── manifest/             # Encrypted file index with version history
+│   ├── p2p/                  # libp2p host, push/pull protocols, mDNS, DHT, queue
+│   ├── ratelimit/            # Token-bucket bandwidth limiter
+│   ├── rebalance/            # Shard redistribution after buddy revocation
+│   ├── scrub/                # Periodic integrity check + silent revival
+│   ├── storage/              # On-disk accounting
+│   ├── tray/                 # Status file for systray IPC
+│   ├── version/              # AppVersion stamped at build time
+│   └── watcher/              # fsnotify directory watcher with debounce
+├── installer/                # WiX v4 MSI descriptor
 ├── pkg/
-│   ├── protocol/            # Types partagés (RSScheme, ManifestEntry…)
-│   └── wire/                # Framing réseau (length-prefix + JSON)
-├── pipeline_test.go         # Tests d'intégration bout-en-bout
-└── ARCHITECTURE.md          # Document d'architecture complet
+│   ├── protocol/             # Shared wire types (ManifestEntry, RSScheme, …)
+│   └── wire/                 # 4-byte length-prefix + JSON framing
+├── scripts/
+│   ├── build-installer.ps1   # Cross-compile + wix build
+│   ├── e2e_test.sh           # End-to-end integration test
+│   └── install-task.ps1      # Windows Task Scheduler registration
+└── docs/
+    └── Changelog.md          # Per-phase history
 ```
-
-## Schémas Reed-Solomon
-
-Reed-Solomon est obligatoire — il n'existe pas de mode miroir simple.
-
-| Buddies | Schéma | Perte tolérée | Overhead stockage |
-|---------|--------|---------------|-------------------|
-| 3       | 2/1    | 1 buddy       | +50%              |
-| 5       | 3/2    | 2 buddies     | +67%              |
-| 8       | 5/3    | 3 buddies     | +60%              |
-| 10      | 6/4    | 4 buddies     | +67%              |
-
-## Roadmap
-
-| Phase | Statut | Description |
-|-------|--------|-------------|
-| 1     | ✅ | Pipeline local — RS + AES + chunker + manifest + store |
-| 2a    | ✅ | P2P invite/join, registre buddies, protocoles push/pull, queue offline |
-| 2b    | ✅ | `backup` pousse vers les buddies ; `restore` récupère les shards manquants ; tests E2E RS+AES+P2P |
-| 2c    | ✅ | Scrub SHA-256 + Silent Revive — détection et réparation silencieuse de la corruption |
-| 2d    | ✅ | Rebalance — `revoke` redistribue automatiquement ; commande `rebalance` |
-| 2e    | ✅ | mDNS LAN — découverte automatique des buddies connus, flush queue à la reconnexion |
-| 2f    | ✅ | Invitation email MFA dual-canal — payload signé par email + 12 mots OOB |
-| 2g    | 🔲 | Recovery Phrase — identité déterministe (BIP39), restauration sur nouvelle machine |
-| 2h    | 🔲 | DHT + UDP hole punching — buddies sur Internet, traversée NAT |
-| 2i    | 🔲 | Manifest distribué — les buddies conservent une copie chiffrée du manifest |
-| 3     | 🔲 | UI Windows (systray, installeur WiX, cercles multiples, versioning) |
-
-## Licence
-
-AGPL-3.0 — voir `LICENSE`.
-
-Toute utilisation dans un service en ligne impose la publication du code source modifié.
