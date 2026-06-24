@@ -40,6 +40,7 @@ import (
 	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
+	"github.com/cerclbackup/cerclbackup/internal/version"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
@@ -108,9 +109,8 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, `CerclBackup
-
-Commands (Phase 1 — local):
+	fmt.Fprintf(os.Stderr, "CerclBackup %s\n\n", version.AppVersion)
+	fmt.Fprintln(os.Stderr, `Commands (Phase 1 — local):
   backup   --src <path> --store <dir> --password <pwd> [--buddies N]
   restore  --file-id <uuid> --store <dir> --out <path> --password <pwd>
   list     --store <dir> --password <pwd>

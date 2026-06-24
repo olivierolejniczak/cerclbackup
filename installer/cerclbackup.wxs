@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CerclBackup Windows Installer (WiX v4)
+
+  Build:
+    wix build installer/cerclbackup.wxs \
+        -d BinDir=dist \
+        -d ProductVersion=1.0.0 \
+        -o dist/cerclbackup-setup.msi
+
+  See scripts/build-installer.ps1 for the full release pipeline that
+  cross-compiles the Go binaries before calling wix.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package
+    Name="CerclBackup"
+    Version="$(var.ProductVersion)"
+    Manufacturer="ALTICAP"
+    UpgradeCode="4A7B1C2D-3E4F-5A6B-7C8D-9E0F1A2B3C4D"
+    Scope="perMachine"
+    InstallerVersion="500">
+
+    <!-- Allow clean upgrade: remove old version before installing new. -->
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of CerclBackup is already installed."
+      Schedule="afterInstallInitialize"/>
+
+    <MediaTemplate EmbedCab="yes"/>
+
+    <!-- WiX standard install-dir UI (shows progress + directory picker). -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER"/>
+    <WixVariable Id="WixUILicenseRtf" Value="installer\license.rtf"/>
+
+    <Feature Id="Core" Title="CerclBackup" Level="1">
+      <ComponentGroupRef Id="Binaries"/>
+      <ComponentGroupRef Id="Shortcuts"/>
+      <ComponentGroupRef Id="Autostart"/>
+    </Feature>
+  </Package>
+
+  <!-- ────────────────────────── Directory tree ────────────────────────── -->
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="CerclBackup"/>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="CerclBackup"/>
+    </StandardDirectory>
+
+    <StandardDirectory Id="StartupFolder"/>
+  </Fragment>
+
+  <!-- ────────────────────────── Binaries ─────────────────────────────── -->
+
+  <Fragment>
+    <ComponentGroup Id="Binaries" Directory="INSTALLFOLDER">
+
+      <!-- Main CLI -->
+      <Component Id="CerclBackupCLI">
+        <File Id="CerclBackupExe"
+              Source="$(var.BinDir)\cerclbackup.exe"
+              KeyPath="yes"/>
+      </Component>
+
+      <!-- Systray companion -->
+      <Component Id="CerclBackupTray">
+        <File Id="CerclBackupTrayExe"
+              Source="$(var.BinDir)\cerclbackup-tray.exe"
+              KeyPath="yes"/>
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- ────────────────────────── Shortcuts ─────────────────────────────── -->
+
+  <Fragment>
+    <ComponentGroup Id="Shortcuts" Directory="AppMenuFolder">
+
+      <!-- Start Menu entry for the tray app -->
+      <Component Id="StartMenuShortcut">
+        <Shortcut Id="TrayStartMenu"
+                  Name="CerclBackup"
+                  Description="P2P encrypted backup — system tray"
+                  Target="[INSTALLFOLDER]cerclbackup-tray.exe"
+                  WorkingDirectory="INSTALLFOLDER"/>
+        <!-- Required registry key so the component has a KeyPath. -->
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\ALTICAP\CerclBackup"
+          Name="StartMenuInstalled"
+          Type="integer"
+          Value="1"
+          KeyPath="yes"/>
+        <RemoveFolder Id="CleanStartMenu" On="uninstall"/>
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+  <!-- ────────────────────────── Autostart ─────────────────────────────── -->
+
+  <Fragment>
+    <ComponentGroup Id="Autostart" Directory="INSTALLFOLDER">
+
+      <!--
+        Run cerclbackup-tray.exe at Windows logon for the current user.
+        The user can remove this via Task Manager > Startup tab.
+      -->
+      <Component Id="AutostartTray">
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Microsoft\Windows\CurrentVersion\Run"
+          Name="CerclBackupTray"
+          Type="string"
+          Value="[INSTALLFOLDER]cerclbackup-tray.exe"
+          KeyPath="yes"/>
+      </Component>
+
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>
