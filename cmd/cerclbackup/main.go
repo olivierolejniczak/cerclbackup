@@ -39,6 +39,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/circle"
 	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
+	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
@@ -222,6 +223,14 @@ func runBackup(args []string) {
 	must(err)
 	entry.Compressed = true
 	must(mf.Save())
+
+	// Write tray status so the systray app can show last-backup time.
+	if cfgDir, err := os.UserConfigDir(); err == nil {
+		st := traystatus.Status{LastBackupAt: time.Now().UTC(), LastFile: *src}
+		if werr := traystatus.Write(filepath.Join(cfgDir, "cerclbackup"), st); werr != nil {
+			log.Printf("[backup] status write: %v", werr)
+		}
+	}
 
 	log.Printf("[backup] ✅ done — file-id: %s  shards: %d  scheme: %d/%d",
 		entry.FileID, len(shardLocations), scheme.DataShards, scheme.ParityShards)
