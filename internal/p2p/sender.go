@@ -4,13 +4,30 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cerclbackup/cerclbackup/internal/ratelimit"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// UploadLimiter gates all outbound shard pushes.  Set it once at startup via
+// SetUploadRate; nil means unlimited.
+var UploadLimiter *ratelimit.Limiter
+
+// SetUploadRate configures the global upload rate cap in bytes per second.
+// 0 disables throttling.  Safe to call before any PushShard calls.
+func SetUploadRate(bytesPerSec int) {
+	UploadLimiter = ratelimit.NewLimiter(bytesPerSec)
+}
+
 // PushShard sends one encrypted shard to the remote peer via the push protocol.
 func PushShard(ctx context.Context, h host.Host, peerID peer.ID, ownerID, fileID string, shardIndex int, isParity bool, data []byte) error {
+	// Apply upload throttle before opening the stream so the quota is consumed
+	// proportionally to the amount of data sent, not wall-clock stream time.
+	if UploadLimiter != nil {
+		UploadLimiter.Wait(len(data))
+	}
+
 	s, err := h.NewStream(ctx, peerID, wire.ProtoPush)
 	if err != nil {
 		return fmt.Errorf("p2p: open push stream: %w", err)
