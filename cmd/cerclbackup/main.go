@@ -39,6 +39,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/manifdist"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	"github.com/cerclbackup/cerclbackup/internal/circle"
+	"github.com/cerclbackup/cerclbackup/internal/archive"
 	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
 	bbexclude "github.com/cerclbackup/cerclbackup/internal/exclude"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
@@ -49,6 +50,7 @@ import (
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
 	"github.com/libp2p/go-libp2p/core/host"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
@@ -114,6 +116,14 @@ func main() {
 		os.Exit(runScrub(os.Args[2:]))
 	case "audit":
 		os.Exit(runAudit(os.Args[2:]))
+	case "export":
+		os.Exit(runExport(os.Args[2:]))
+	case "import":
+		os.Exit(runImport(os.Args[2:]))
+	case "diff":
+		os.Exit(runDiff(os.Args[2:]))
+	case "doctor":
+		os.Exit(runDoctor(os.Args[2:]))
 	case "circle":
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
@@ -161,6 +171,7 @@ func runBackup(args []string) {
 	buddies    := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
 	excl       := fs.String("exclude", "", "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
 	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
+	autoPrune  := fs.Bool("auto-prune", false, "Apply default retention policy after each backup")
 	_ = fs.Parse(args)
 
 	if *src == "" || *password == "" {
@@ -256,6 +267,20 @@ func runBackup(args []string) {
 	must(err)
 	entry.Compressed = true
 	must(mf.Save())
+
+	if *autoPrune {
+		pruned := mf.PruneVersions(manifest.DefaultRetentionPolicy())
+		if len(pruned) > 0 {
+			st2, err := storage.New(*storeDir)
+			if err == nil {
+				for _, id := range pruned {
+					st2.Delete(id)
+				}
+			}
+			must(mf.Save())
+			log.Printf("[backup] auto-prune: removed %d old version(s)", len(pruned))
+		}
+	}
 
 	// Write tray status so the systray app can show last-backup time.
 	if cfgDir, err := os.UserConfigDir(); err == nil {
@@ -1687,7 +1712,407 @@ func runAudit(args []string) int {
 	return 0
 }
 
-// promptPassword reads a password from stdin without echoing it.
+// ── runExport ─────────────────────────────────────────────────────────────────
+
+func runExport(args []string) int {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	filePath := fs.String("file", "", "File path to export (required)")
+	ver      := fs.Int("version", 0, "Version to export (0 = latest)")
+	out      := fs.String("out", "", "Output .cbk file (default: <name>_v<N>_<date>.cbk)")
+	password := fs.String("password", "", "Keystore password (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store")
+	_ = fs.Parse(args)
+
+	if *filePath == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "export: --file and --password are required")
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	mf := openManifest(ks.MasterKey())
+	if err := mf.Load(); err != nil {
+		log.Printf("export: load manifest: %v", err)
+		return 1
+	}
+
+	var entry *protocol.ManifestEntry
+	if *ver > 0 {
+		for _, e := range mf.ListVersions(*filePath) {
+			if e.Version == *ver {
+				entry = e
+				break
+			}
+		}
+	} else {
+		entry = mf.Latest(*filePath)
+	}
+	if entry == nil {
+		log.Printf("export: %q not found in manifest", *filePath)
+		return 1
+	}
+
+	st, err := storage.New(*storeDir)
+	if err != nil {
+		log.Printf("export: open store: %v", err)
+		return 1
+	}
+
+	total := entry.Scheme.TotalShards()
+	shards := make([][]byte, total)
+	for i := 0; i < total; i++ {
+		data, err := st.Get(entry.FileID, i)
+		if err != nil {
+			log.Printf("export: shard %d: %v", i, err)
+			// Leave nil — RS can reconstruct if enough data shards present.
+		}
+		shards[i] = data
+	}
+
+	outPath := *out
+	if outPath == "" {
+		outPath = archive.Filename(entry)
+	}
+
+	f, err := os.Create(outPath)
+	if err != nil {
+		log.Printf("export: create %q: %v", outPath, err)
+		return 1
+	}
+	defer f.Close()
+
+	if err := archive.Write(f, entry, shards); err != nil {
+		log.Printf("export: write archive: %v", err)
+		return 1
+	}
+
+	fmt.Printf("Exported: %s\n", outPath)
+	fmt.Printf("  File   : %s\n", entry.Path)
+	fmt.Printf("  Version: %d  (backed %s)\n", entry.Version, entry.BackedAt.Format("2006-01-02 15:04"))
+	fmt.Printf("  Shards : %d data + %d parity\n", entry.Scheme.DataShards, entry.Scheme.ParityShards)
+	return 0
+}
+
+// ── runImport ─────────────────────────────────────────────────────────────────
+
+func runImport(args []string) int {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	cbk      := fs.String("file", "", ".cbk archive to import (required)")
+	password := fs.String("password", "", "Keystore password (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store")
+	_ = fs.Parse(args)
+
+	if *cbk == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "import: --file and --password are required")
+		return 1
+	}
+
+	f, err := os.Open(*cbk)
+	if err != nil {
+		log.Printf("import: open %q: %v", *cbk, err)
+		return 1
+	}
+	defer f.Close()
+
+	entry, shards, err := archive.Read(f)
+	if err != nil {
+		log.Printf("import: read archive: %v", err)
+		return 1
+	}
+
+	st, err := storage.New(*storeDir)
+	if err != nil {
+		log.Printf("import: open store: %v", err)
+		return 1
+	}
+
+	for i, data := range shards {
+		if len(data) == 0 {
+			continue
+		}
+		isParity := i >= entry.Scheme.DataShards
+		if err := st.Put(entry.FileID, i, isParity, data); err != nil {
+			log.Printf("import: store shard %d: %v", i, err)
+			return 1
+		}
+	}
+
+	ks := openOrCreateKeystore(*password)
+	mf := openManifest(ks.MasterKey())
+	if err := mf.Load(); err != nil {
+		log.Printf("import: load manifest: %v", err)
+		return 1
+	}
+
+	// Add to manifest only if this FileID isn't already present.
+	if mf.Get(entry.FileID) == nil {
+		mf.ImportEntry(entry)
+		if err := mf.Save(); err != nil {
+			log.Printf("import: save manifest: %v", err)
+			return 1
+		}
+	}
+
+	fmt.Printf("Imported: %s\n", *cbk)
+	fmt.Printf("  File   : %s\n", entry.Path)
+	fmt.Printf("  Version: %d\n", entry.Version)
+	fmt.Printf("  FileID : %s\n", entry.FileID)
+	fmt.Println("Run 'cerclbackup restore --file <path>' to recover the file.")
+	return 0
+}
+
+// ── runDiff ───────────────────────────────────────────────────────────────────
+
+func runDiff(args []string) int {
+	fs := flag.NewFlagSet("diff", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	since    := fs.String("since", "", "Show changes since this time (RFC3339 or YYYY-MM-DD)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store (for deleted detection)")
+	_ = fs.Parse(args)
+
+	if *password == "" || *since == "" {
+		fmt.Fprintln(os.Stderr, "diff: --password and --since are required")
+		fmt.Fprintln(os.Stderr, "  example: cerclbackup diff --since 2026-06-01 --password <pw>")
+		return 1
+	}
+	_ = storeDir
+
+	var cutoff time.Time
+	for _, layout := range []string{time.RFC3339, "2006-01-02", "2006-01-02 15:04:05"} {
+		if t, err := time.ParseInLocation(layout, *since, time.Local); err == nil {
+			cutoff = t
+			break
+		}
+	}
+	if cutoff.IsZero() {
+		log.Printf("diff: cannot parse --since %q (try YYYY-MM-DD or RFC3339)", *since)
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	mf := openManifest(ks.MasterKey())
+	if err := mf.Load(); err != nil {
+		log.Printf("diff: load manifest: %v", err)
+		return 1
+	}
+
+	entries := mf.All()
+
+	// Collect new/changed entries since cutoff.
+	type change struct {
+		path    string
+		version int
+		backedAt time.Time
+		fileID  string
+		size    int64
+		kind    string // "new" or "updated"
+	}
+	latestBefore := make(map[string]int) // path → highest version before cutoff
+	for _, e := range entries {
+		t := e.BackedAt
+		if t.IsZero() {
+			t = e.Modified
+		}
+		if t.Before(cutoff) && e.Version > latestBefore[e.Path] {
+			latestBefore[e.Path] = e.Version
+		}
+	}
+
+	var changes []change
+	for _, e := range entries {
+		t := e.BackedAt
+		if t.IsZero() {
+			t = e.Modified
+		}
+		if !t.After(cutoff) {
+			continue
+		}
+		kind := "updated"
+		if latestBefore[e.Path] == 0 {
+			kind = "new"
+		}
+		changes = append(changes, change{
+			path:    e.Path,
+			version: e.Version,
+			backedAt: t,
+			fileID:  e.FileID,
+			size:    e.Size,
+			kind:    kind,
+		})
+	}
+
+	if len(changes) == 0 {
+		fmt.Printf("No changes since %s.\n", cutoff.Format("2006-01-02 15:04"))
+		return 0
+	}
+
+	fmt.Printf("Changes since %s\n", cutoff.Format("2006-01-02 15:04"))
+	fmt.Printf("%-8s  %-4s  %-26s  %-10s  %s\n", "KIND", "VER", "BACKED AT", "SIZE", "PATH")
+	fmt.Println("─────────────────────────────────────────────────────────────────────────────")
+	for _, c := range changes {
+		fmt.Printf("%-8s  %-4d  %-26s  %-10s  %s\n",
+			c.kind, c.version,
+			c.backedAt.Format("2006-01-02 15:04:05"),
+			formatBytes(c.size),
+			c.path)
+	}
+	return 0
+}
+
+// ── runDoctor ─────────────────────────────────────────────────────────────────
+
+func runDoctor(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	password     := fs.String("password", "", "Keystore password (required)")
+	storeDir     := fs.String("store", storage.DefaultStorePath(), "Shard store")
+	checkBuddies := fs.Bool("check-buddies", true, "Probe buddy connectivity")
+	maxAge       := fs.Duration("max-age", 25*time.Hour, "Warn if last backup is older than this")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "doctor: --password is required")
+		return 1
+	}
+
+	type check struct {
+		name string
+		ok   bool
+		msg  string
+	}
+	var checks []check
+	allOK := true
+
+	add := func(name string, ok bool, msg string) {
+		checks = append(checks, check{name, ok, msg})
+		if !ok {
+			allOK = false
+		}
+	}
+
+	// 1. Keystore
+	ks, err := openKeystore(*password)
+	if err != nil {
+		add("keystore", false, fmt.Sprintf("cannot open: %v", err))
+	} else {
+		add("keystore", true, "opened OK")
+	}
+
+	// 2. Peer identity
+	var privKey libp2pcrypto.PrivKey
+	if ks != nil {
+		privKey, err = p2pmod.EnsurePeerIdentity(ks, *password)
+		if err != nil {
+			add("peer identity", false, fmt.Sprintf("%v", err))
+		} else {
+			pid, _ := peer.IDFromPrivateKey(privKey)
+			add("peer identity", true, pid.String()[:20]+"…")
+		}
+	}
+
+	// 3. Store writable
+	st, err := storage.New(*storeDir)
+	if err != nil {
+		add("shard store", false, fmt.Sprintf("cannot open %s: %v", *storeDir, err))
+	} else {
+		fileIDs, err := st.ListFiles()
+		if err != nil {
+			add("shard store", false, fmt.Sprintf("list error: %v", err))
+		} else {
+			add("shard store", true, fmt.Sprintf("%s — %d file(s) stored", *storeDir, len(fileIDs)))
+		}
+	}
+
+	// 4. Manifest
+	var mf *manifest.Manifest
+	if ks != nil {
+		mf = openManifest(ks.MasterKey())
+		if err := mf.Load(); err != nil {
+			add("manifest", false, fmt.Sprintf("load error: %v", err))
+			mf = nil
+		} else {
+			entries := mf.All()
+			add("manifest", true, fmt.Sprintf("%d version(s) tracked", len(entries)))
+		}
+	}
+
+	// 5. Last backup age
+	if ks != nil {
+		cfgDir, _ := os.UserConfigDir()
+		st2, err := traystatus.Read(filepath.Join(cfgDir, "cerclbackup"))
+		if err != nil || st2.LastBackupAt.IsZero() {
+			add("last backup", false, "no backup recorded yet")
+		} else {
+			age := time.Since(st2.LastBackupAt)
+			msg := fmt.Sprintf("%s ago — %s", formatAge(age), st2.LastFile)
+			add("last backup", age <= *maxAge, msg)
+		}
+	}
+
+	// 6. Buddy connectivity
+	if *checkBuddies && ks != nil {
+		reg, err := openRegistry(ks)
+		if err != nil {
+			add("buddies", false, fmt.Sprintf("registry: %v", err))
+		} else {
+			buddies := reg.List()
+			if len(buddies) == 0 {
+				add("buddies", false, "no buddies registered")
+			} else if privKey != nil {
+				h, err := p2pmod.NewHost(privKey, 0)
+				if err == nil {
+					defer h.Close()
+					reachable := 0
+					for _, b := range buddies {
+						pid, err := peer.Decode(b.PeerID)
+						if err != nil {
+							continue
+						}
+						addrs := make([]multiaddr.Multiaddr, 0)
+						for _, a := range b.Addrs {
+							if ma, err := multiaddr.NewMultiaddr(a); err == nil {
+								addrs = append(addrs, ma)
+							}
+						}
+						ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+						if err := h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: addrs}); err == nil {
+							reachable++
+						}
+						cancel()
+					}
+					ok := reachable > 0
+					add("buddies", ok, fmt.Sprintf("%d/%d reachable", reachable, len(buddies)))
+				} else {
+					add("buddies", false, fmt.Sprintf("host: %v", err))
+				}
+			}
+		}
+	}
+
+	// 7. Disk space
+	var stat syscall.Statfs_t
+	checkDir := *storeDir
+	if err := syscall.Statfs(checkDir, &stat); err == nil {
+		free := stat.Bavail * uint64(stat.Bsize)
+		add("disk space", free > 100*1024*1024,
+			fmt.Sprintf("%s free in %s", formatBytes(int64(free)), checkDir))
+	}
+
+	// ── Print results ──────────────────────────────────────────────────────────
+	fmt.Printf("CerclBackup %s — doctor\n\n", version.AppVersion)
+	for _, c := range checks {
+		mark := "✓"
+		if !c.ok {
+			mark = "✗"
+		}
+		fmt.Printf("  %s  %-20s  %s\n", mark, c.name, c.msg)
+	}
+	fmt.Println()
+	if allOK {
+		fmt.Println("All checks passed.")
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "One or more checks failed.")
+	return 1
+}
 // Falls back to plain line read when running under a test harness
 // that is not a real TTY.
 func promptPassword(prompt string) (string, error) {
@@ -1845,6 +2270,19 @@ func runStorage(args []string) int {
 	return 0
 }
 
+func formatAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
 func formatBytes(b int64) string {
 	const unit = 1024
 	if b < unit {
@@ -1924,7 +2362,8 @@ func runWatch(args []string) {
 	password := fs.String("password", "", "Encryption password (required)")
 	buddies  := fs.Int("buddies", 1, "Reed-Solomon parity shards")
 	debounce := fs.Duration("debounce", 3*time.Second, "Quiet period before backup fires")
-	excl     := fs.String("exclude", ".git,node_modules,*.tmp,*.swp", "Comma-separated glob patterns to skip")
+	excl      := fs.String("exclude", ".git,node_modules,*.tmp,*.swp", "Comma-separated glob patterns to skip")
+	autoPrune := fs.Bool("auto-prune", true, "Apply default retention policy after each backup (default on)")
 	_ = fs.Parse(args)
 
 	if *srcDir == "" || *password == "" {
@@ -1948,12 +2387,16 @@ func runWatch(args []string) {
 			return
 		}
 		log.Printf("[watch] changed: %s", path)
-		runBackup([]string{
+		backupArgs := []string{
 			"--src", path,
 			"--store", *storeDir,
 			"--password", *password,
 			"--buddies", fmt.Sprintf("%d", *buddies),
-		})
+		}
+		if *autoPrune {
+			backupArgs = append(backupArgs, "--auto-prune")
+		}
+		runBackup(backupArgs)
 	})
 	if err != nil {
 		log.Fatalf("[watch] init: %v", err)

@@ -339,6 +339,17 @@ func (m *Manifest) All() []*protocol.ManifestEntry {
 	return out
 }
 
+// ImportEntry inserts a pre-built ManifestEntry (e.g. from an archive import)
+// into the manifest without re-deriving any fields.  No-op if the FileID
+// already exists.
+func (m *Manifest) ImportEntry(e *protocol.ManifestEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.d.Entries[e.FileID]; !exists {
+		m.d.Entries[e.FileID] = e
+	}
+}
+
 // Remove deletes the entry for fileID from the manifest.
 func (m *Manifest) Remove(fileID string) {
 	m.mu.Lock()
