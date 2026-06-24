@@ -28,12 +28,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
 	"github.com/cerclbackup/cerclbackup/internal/chunker"
 	"github.com/cerclbackup/cerclbackup/internal/codec"
+	cerclConfig "github.com/cerclbackup/cerclbackup/internal/config"
 	bbcrypto "github.com/cerclbackup/cerclbackup/internal/crypto"
 	"github.com/cerclbackup/cerclbackup/internal/emailinvite"
 	"github.com/cerclbackup/cerclbackup/internal/identity"
@@ -59,6 +61,9 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+// cfg holds values loaded from the user's config.yaml, applied as flag defaults.
+var cfg cerclConfig.Config
+
 // Thin wrappers so the identity package functions are accessible inside main
 // without repeating the import path in each function body.
 const identitySeedKeyName = identity.KeyName
@@ -75,6 +80,12 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
+	}
+
+	cfg = cerclConfig.Load()
+	// Password from env always beats config file.
+	if p := os.Getenv("CERCLBACKUP_PASSWORD"); p != "" {
+		cfg.Password = p
 	}
 
 	switch os.Args[1] {
@@ -126,6 +137,10 @@ func main() {
 		os.Exit(runDiff(os.Args[2:]))
 	case "doctor":
 		os.Exit(runDoctor(os.Args[2:]))
+	case "passwd":
+		os.Exit(runPasswd(os.Args[2:]))
+	case "config":
+		os.Exit(runConfig(os.Args[2:]))
 	case "circle":
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
@@ -167,13 +182,13 @@ Commands (Phase 3 -- multi-circle & versioning):
 
 func runBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
-	src        := fs.String("src", "", "Source file to back up")
+	src        := fs.String("src", cfg.Src, "Source file to back up")
 	storeDir   := fs.String("store", storage.DefaultStorePath(), "Store directory")
-	password   := fs.String("password", "", "Encryption password")
+	password   := fs.String("password", cfg.Password, "Encryption password")
 	buddies    := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
-	excl       := fs.String("exclude", "", "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
-	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
-	autoPrune  := fs.Bool("auto-prune", false, "Apply default retention policy after each backup")
+	excl       := fs.String("exclude", cfg.Exclude, "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
+	uploadKbps := fs.Int("upload-kbps", cfg.UploadKbps, "Max upload speed in KB/s (0 = unlimited)")
+	autoPrune  := fs.Bool("auto-prune", cfg.AutoPrune, "Apply default retention policy after each backup")
 	_ = fs.Parse(args)
 
 	if *src == "" || *password == "" {
@@ -326,7 +341,7 @@ func runRestore(args []string) {
 	ver      := fs.Int("version", 0, "Version number to restore (0 = latest, requires --file)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
 	out      := fs.String("out", "", "Output file path (required)")
-	password := fs.String("password", "", "Encryption password (required)")
+	password := fs.String("password", cfg.Password, "Encryption password (required)")
 	_ = fs.Parse(args)
 
 	if *out == "" || *password == "" {
@@ -428,6 +443,9 @@ func runRestore(args []string) {
 	verifyHasher := sha256.New()
 
 	for ci := 0; ci < numChunks; ci++ {
+		if numChunks > 1 {
+			log.Printf("[restore] chunk %d/%d", ci+1, numChunks)
+		}
 		// Collect and decrypt the shards for this original chunk.
 		rawShards := make([][]byte, shardsPerChunk)
 		for si := 0; si < shardsPerChunk; si++ {
@@ -657,10 +675,10 @@ func openInviteManager() *invite.Manager {
 
 func runServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	password   := fs.String("password", "", "keystore password (required)")
+	password   := fs.String("password", cfg.Password, "keystore password (required)")
 	port       := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
-	uploadKbps := fs.Int("upload-kbps", 0, "Max upload speed in KB/s (0 = unlimited)")
-	healthAddr := fs.String("health-addr", "127.0.0.1:7743", "HTTP health/metrics endpoint address (empty = disabled)")
+	uploadKbps := fs.Int("upload-kbps", cfg.UploadKbps, "Max upload speed in KB/s (0 = unlimited)")
+	healthAddr := fs.String("health-addr", cfg.HealthAddr, "HTTP health/metrics endpoint address (empty = disabled)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -1576,20 +1594,60 @@ func runInit(args []string) int {
 
 // ── runBuddy ──────────────────────────────────────────────────────────────────
 
-// runBuddy dispatches sub-commands: buddy list (existing), buddy status.
+// runBuddy dispatches sub-commands: buddy list (existing), buddy status, buddy rm.
 func runBuddy(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: cerclbackup buddy <list|invite|status> [flags]")
+		fmt.Fprintln(os.Stderr, "Usage: cerclbackup buddy <list|status|rm> [flags]")
 		return 1
 	}
 	switch args[0] {
 	case "status":
 		return runBuddyStatus(args[1:])
+	case "list":
+		runBuddyLegacy(args) // existing list handler
+		return 0
+	case "rm":
+		return runBuddyRm(args[1:])
 	default:
-		// Delegate everything else to the original buddy handler.
 		runBuddyLegacy(args)
 		return 0
 	}
+}
+
+func runBuddyRm(args []string) int {
+	fs := flag.NewFlagSet("buddy rm", flag.ExitOnError)
+	peerID      := fs.String("peer-id", "", "Peer ID to remove (required)")
+	password    := fs.String("password", cfg.Password, "Keystore password (required)")
+	noRebalance := fs.Bool("no-rebalance", false, "Skip automatic rebalance after removal")
+	_ = fs.Parse(args)
+
+	if *peerID == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "buddy rm: --peer-id and --password are required")
+		return 1
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Printf("buddy rm: %v", err)
+		return 1
+	}
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Printf("buddy rm: registry: %v", err)
+		return 1
+	}
+
+	if err := reg.Remove(*peerID); err != nil {
+		log.Printf("buddy rm: %v", err)
+		return 1
+	}
+	fmt.Printf("Buddy %s removed.\n", *peerID)
+
+	if !*noRebalance {
+		fmt.Println("Rebalancing shards across remaining buddies...")
+		rebalanceWithKeystore(ks, *password)
+	}
+	return 0
 }
 
 func runBuddyStatus(args []string) int {
@@ -2426,13 +2484,13 @@ func runScrub(args []string) int {
 // It runs until interrupted (SIGINT/SIGTERM or Ctrl-C).
 func runWatch(args []string) {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
-	srcDir   := fs.String("src", "", "Directory to monitor (required)")
+	srcDir   := fs.String("src", cfg.Src, "Directory to monitor (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
-	password := fs.String("password", "", "Encryption password (required)")
+	password := fs.String("password", cfg.Password, "Encryption password (required)")
 	buddies  := fs.Int("buddies", 1, "Reed-Solomon parity shards")
 	debounce := fs.Duration("debounce", 3*time.Second, "Quiet period before backup fires")
 	excl      := fs.String("exclude", ".git,node_modules,*.tmp,*.swp", "Comma-separated glob patterns to skip")
-	autoPrune := fs.Bool("auto-prune", true, "Apply default retention policy after each backup (default on)")
+	autoPrune := fs.Bool("auto-prune", cfg.AutoPrune, "Apply default retention policy after each backup (default on)")
 	_ = fs.Parse(args)
 
 	if *srcDir == "" || *password == "" {
@@ -2451,11 +2509,13 @@ func runWatch(args []string) {
 
 	log.Printf("[watch] monitoring %s (debounce %s, exclude %q)", *srcDir, *debounce, *excl)
 
+	var watchedCount int64
 	w, err := watcher.NewWithDebounce(*srcDir, *debounce, func(path string) {
 		if ef.Match(path) {
 			return
 		}
-		log.Printf("[watch] changed: %s", path)
+		n := atomic.AddInt64(&watchedCount, 1)
+		log.Printf("[watch] file %d: %s", n, path)
 		backupArgs := []string{
 			"--src", path,
 			"--store", *storeDir,
@@ -2617,4 +2677,125 @@ func runVersions(args []string) int {
 		fmt.Printf("%-4d %-26s %-64s %s\n", v.Version, backedAt, v.FileID, v.Hash[:16]+"...")
 	}
 	return 0
+}
+
+// ---------------------------------------------------------------------------
+// passwd -- change keystore password
+// ---------------------------------------------------------------------------
+
+func runPasswd(args []string) int {
+	fs := flag.NewFlagSet("passwd", flag.ExitOnError)
+	oldFlag := fs.String("old", "", "Current password (prompted if empty)")
+	newFlag := fs.String("new", "", "New password (prompted if empty)")
+	_ = fs.Parse(args)
+
+	oldPwd := *oldFlag
+	if oldPwd == "" {
+		if p := os.Getenv("CERCLBACKUP_PASSWORD"); p != "" {
+			oldPwd = p
+		} else {
+			fmt.Fprint(os.Stderr, "Current password: ")
+			b, err := readPassword()
+			fmt.Fprintln(os.Stderr)
+			if err != nil {
+				log.Printf("passwd: read old: %v", err)
+				return 1
+			}
+			oldPwd = b
+		}
+	}
+
+	newPwd := *newFlag
+	if newPwd == "" {
+		fmt.Fprint(os.Stderr, "New password: ")
+		b, err := readPassword()
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			log.Printf("passwd: read new: %v", err)
+			return 1
+		}
+		newPwd = b
+
+		fmt.Fprint(os.Stderr, "Confirm new password: ")
+		b2, err := readPassword()
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			log.Printf("passwd: read confirm: %v", err)
+			return 1
+		}
+		if b2 != newPwd {
+			fmt.Fprintln(os.Stderr, "passwd: passwords do not match")
+			return 1
+		}
+	}
+
+	if newPwd == "" {
+		fmt.Fprintln(os.Stderr, "passwd: new password cannot be empty")
+		return 1
+	}
+
+	ks, err := openKeystore(oldPwd)
+	if err != nil {
+		log.Printf("passwd: wrong password or corrupted keystore: %v", err)
+		return 1
+	}
+
+	if err := ks.Save(newPwd); err != nil {
+		log.Printf("passwd: save: %v", err)
+		return 1
+	}
+
+	fmt.Println("Keystore password changed successfully.")
+	fmt.Println("Update CERCLBACKUP_PASSWORD or your config.yaml if applicable.")
+	return 0
+}
+
+// ---------------------------------------------------------------------------
+// config -- show / init config file
+// ---------------------------------------------------------------------------
+
+func runConfig(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: cerclbackup config <show|init>")
+		return 1
+	}
+	switch args[0] {
+	case "show":
+		path := cerclConfig.DefaultPath()
+		loaded := cerclConfig.LoadFrom(path)
+		fmt.Printf("Config file: %s\n\n", path)
+		fmt.Printf("password    : %s\n", maskPassword(loaded.Password))
+		fmt.Printf("src         : %s\n", loaded.Src)
+		fmt.Printf("exclude     : %s\n", loaded.Exclude)
+		fmt.Printf("upload_kbps : %d\n", loaded.UploadKbps)
+		fmt.Printf("health_addr : %s\n", loaded.HealthAddr)
+		fmt.Printf("port        : %d\n", loaded.Port)
+		fmt.Printf("debounce    : %s\n", loaded.Debounce)
+		fmt.Printf("auto_prune  : %v\n", loaded.AutoPrune)
+		fmt.Printf("store_dir   : %s\n", loaded.StoreDir)
+		return 0
+	case "init":
+		path := cerclConfig.DefaultPath()
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(os.Stderr, "config init: %s already exists (delete it first to regenerate)\n", path)
+			return 1
+		}
+		if err := cerclConfig.WriteTemplate(path); err != nil {
+			log.Printf("config init: %v", err)
+			return 1
+		}
+		fmt.Printf("Sample config written to %s\n", path)
+		fmt.Println("Edit it to set your defaults, then uncomment the relevant lines.")
+		return 0
+	default:
+		fmt.Fprintln(os.Stderr, "Usage: cerclbackup config <show|init>")
+		return 1
+	}
+}
+
+func maskPassword(p string) string {
+	if p == "" {
+		return "(not set)"
+	}
+	return "***"
 }
