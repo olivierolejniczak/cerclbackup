@@ -17,6 +17,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"sync"
 	"crypto/sha256"
 	"encoding/hex"
 	"flag"
@@ -92,7 +93,7 @@ func main() {
 	case "join":
 		runJoin(os.Args[2:])
 	case "buddy":
-		runBuddy(os.Args[2:])
+		os.Exit(runBuddy(os.Args[2:]))
 	case "revoke":
 		runRevoke(os.Args[2:])
 	case "rebalance":
@@ -111,6 +112,8 @@ func main() {
 		os.Exit(runStorage(os.Args[2:]))
 	case "scrub":
 		os.Exit(runScrub(os.Args[2:]))
+	case "audit":
+		os.Exit(runAudit(os.Args[2:]))
 	case "circle":
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
@@ -801,7 +804,7 @@ func runJoin(args []string) {
 // buddy list
 // ---------------------------------------------------------------------------
 
-func runBuddy(args []string) {
+func runBuddyLegacy(args []string) {
 	if len(args) == 0 || args[0] != "list" {
 		fmt.Fprintln(os.Stderr, "usage: cerclbackup buddy list --password <pwd>")
 		os.Exit(1)
@@ -1474,6 +1477,213 @@ func runInit(args []string) int {
 	fmt.Println("  cerclbackup invite  --buddy-addr <multiaddr> --password <pw>")
 	fmt.Printf("\nKeystore : %s\n", ksPath)
 	fmt.Printf("Store    : %s\n", *storeDir)
+	return 0
+}
+
+// ── runBuddy ──────────────────────────────────────────────────────────────────
+
+// runBuddy dispatches sub-commands: buddy list (existing), buddy status.
+func runBuddy(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: cerclbackup buddy <list|invite|status> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "status":
+		return runBuddyStatus(args[1:])
+	default:
+		// Delegate everything else to the original buddy handler.
+		runBuddyLegacy(args)
+		return 0
+	}
+}
+
+func runBuddyStatus(args []string) int {
+	fs := flag.NewFlagSet("buddy status", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	timeout  := fs.Duration("timeout", 5*time.Second, "Connect timeout per buddy")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "buddy status: --password is required")
+		return 1
+	}
+
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Printf("buddy status: %v", err)
+		return 1
+	}
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Printf("buddy status: registry: %v", err)
+		return 1
+	}
+
+	buddies := reg.List()
+	if len(buddies) == 0 {
+		fmt.Println("No buddies registered yet.  Use 'cerclbackup invite' to add one.")
+		return 0
+	}
+
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Printf("buddy status: peer identity: %v", err)
+		return 1
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Printf("buddy status: host: %v", err)
+		return 1
+	}
+	defer h.Close()
+
+	type result struct {
+		entry   *buddy.Entry
+		ok      bool
+		latency time.Duration
+	}
+
+	results := make([]result, len(buddies))
+	var wg sync.WaitGroup
+	for i, e := range buddies {
+		wg.Add(1)
+		go func(idx int, entry *buddy.Entry) {
+			defer wg.Done()
+			pid, err := peer.Decode(entry.PeerID)
+			if err != nil {
+				results[idx] = result{entry: entry}
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+			defer cancel()
+			addrs := make([]multiaddr.Multiaddr, 0, len(entry.Addrs))
+			for _, a := range entry.Addrs {
+				if ma, err := multiaddr.NewMultiaddr(a); err == nil {
+					addrs = append(addrs, ma)
+				}
+			}
+			start := time.Now()
+			err = h.Connect(ctx, peer.AddrInfo{ID: pid, Addrs: addrs})
+			lat := time.Since(start)
+			results[idx] = result{entry: entry, ok: err == nil, latency: lat}
+		}(i, e)
+	}
+	wg.Wait()
+
+	fmt.Printf("%-20s  %-12s  %-10s  %s\n", "NAME", "STATUS", "LATENCY", "PEER ID")
+	fmt.Println("──────────────────────────────────────────────────────────────────────")
+	exitCode := 0
+	for _, r := range results {
+		name := r.entry.FriendlyName
+		if name == "" {
+			name = r.entry.PeerID[:12] + "..."
+		}
+		status := "OFFLINE"
+		lat := "-"
+		if r.ok {
+			status = "online"
+			lat = fmt.Sprintf("%dms", r.latency.Milliseconds())
+		} else {
+			exitCode = 2 // at least one buddy unreachable
+		}
+		fmt.Printf("%-20s  %-12s  %-10s  %s\n", name, status, lat, r.entry.PeerID)
+	}
+	return exitCode
+}
+
+// ── runAudit ──────────────────────────────────────────────────────────────────
+
+func runAudit(args []string) int {
+	fs := flag.NewFlagSet("audit", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store to audit")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "audit: --password is required")
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	masterKey := ks.MasterKey()
+
+	st, err := storage.New(*storeDir)
+	if err != nil {
+		log.Printf("audit: open store: %v", err)
+		return 1
+	}
+
+	fileIDs, err := st.ListFiles()
+	if err != nil {
+		log.Printf("audit: list files: %v", err)
+		return 1
+	}
+
+	mf := openManifest(masterKey)
+	if err := mf.Load(); err != nil {
+		log.Printf("audit: load manifest: %v", err)
+		return 1
+	}
+
+	var checked, valid, corrupted, orphaned int
+
+	for _, fileID := range fileIDs {
+		entry := mf.Get(fileID)
+
+		// Try shards 0..TotalShards-1; scan up to a generous ceiling if
+		// not in manifest (orphaned file check).
+		maxShards := 8
+		if entry != nil {
+			maxShards = entry.Scheme.DataShards + entry.Scheme.ParityShards
+		}
+
+		for idx := 0; idx < maxShards; idx++ {
+			blob, err := st.Get(fileID, idx)
+			if err != nil {
+				break // no more shards for this fileID
+			}
+			checked++
+
+			if entry == nil {
+				orphaned++
+				continue
+			}
+
+			// Derive the per-shard key the same way the backup did.
+			hashBytes, err := hexToHash(entry.Hash)
+			if err != nil {
+				log.Printf("[audit] bad hash in manifest for %s: %v", fileID, err)
+				corrupted++
+				continue
+			}
+			fileKey, err := bbcrypto.DeriveFileKey(masterKey, hashBytes)
+			if err != nil {
+				log.Printf("[audit] key derivation for %s: %v", fileID, err)
+				corrupted++
+				continue
+			}
+			_, decErr := bbcrypto.DecryptShard(fileKey, idx, blob)
+			if decErr != nil {
+				corrupted++
+				log.Printf("[audit] CORRUPTED shard %s/%d: %v", fileID, idx, decErr)
+			} else {
+				valid++
+			}
+		}
+	}
+
+	fmt.Println("Audit complete")
+	fmt.Printf("  Shards checked  : %d\n", checked)
+	fmt.Printf("  Valid           : %d\n", valid)
+	fmt.Printf("  Corrupted       : %d  (AES-GCM tag mismatch)\n", corrupted)
+	fmt.Printf("  Orphaned        : %d  (in store but not in manifest)\n", orphaned)
+
+	if corrupted > 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: corruption detected — run 'cerclbackup scrub' to attempt recovery.")
+		return 1
+	}
 	return 0
 }
 
