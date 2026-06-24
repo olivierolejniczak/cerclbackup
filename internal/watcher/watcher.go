@@ -1,160 +1,135 @@
-// Package watcher monitors file system paths and emits FileEvents.
-// It wraps fsnotify with debouncing and temporary-file filtering.
+// Package watcher monitors a directory tree for file changes and fires a
+// callback with a debounce window so that rapid saves (editor temp files,
+// autosave bursts) collapse into a single backup trigger per file.
 package watcher
 
 import (
+	"io/fs"
 	"log"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/fsnotify/fsnotify"
 )
 
-const debounceDuration = 2 * time.Second
+const defaultDebounce = 3 * time.Second
 
-// ignoredPatterns lists filename patterns that should never trigger a backup.
-var ignoredPatterns = []string{
-	"~$",          // MS Office temp files
-	".tmp",        // Generic temp files
-	".swp",        // Vim swap
-	".DS_Store",   // macOS metadata
-	"desktop.ini", // Windows folder metadata
-	"thumbs.db",
-}
+// Handler is called with the canonical path of a changed file.
+// It is invoked from a single goroutine; concurrent calls never happen.
+type Handler func(path string)
 
-// Watcher monitors one or more directory trees and emits FileEvents.
+// Watcher monitors srcDir recursively and calls h for each settled change.
 type Watcher struct {
-	fsw    *fsnotify.Watcher
-	events chan protocol.FileEvent
-	done   chan struct{}
-
-	mu      sync.Mutex
-	pending map[string]*time.Timer // debounce timers keyed by path
+	srcDir   string
+	debounce time.Duration
+	handler  Handler
+	fw       *fsnotify.Watcher
+	stopCh   chan struct{}
 }
 
-// New creates a Watcher and starts its internal goroutine.
-func New() (*Watcher, error) {
-	fsw, err := fsnotify.NewWatcher()
+// New creates a Watcher but does not start it.
+// Call Start to begin monitoring.
+func New(srcDir string, h Handler) (*Watcher, error) {
+	return NewWithDebounce(srcDir, defaultDebounce, h)
+}
+
+// NewWithDebounce creates a Watcher with a custom debounce window.
+func NewWithDebounce(srcDir string, debounce time.Duration, h Handler) (*Watcher, error) {
+	abs, err := filepath.Abs(srcDir)
 	if err != nil {
 		return nil, err
 	}
-	w := &Watcher{
-		fsw:     fsw,
-		events:  make(chan protocol.FileEvent, 64),
-		done:    make(chan struct{}),
-		pending: make(map[string]*time.Timer),
+	fw, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, err
 	}
-	go w.loop()
-	return w, nil
+	return &Watcher{
+		srcDir:   abs,
+		debounce: debounce,
+		handler:  h,
+		fw:       fw,
+		stopCh:   make(chan struct{}),
+	}, nil
 }
 
-// Watch adds path (and all sub-directories) to the watch list.
-func (w *Watcher) Watch(path string) error {
-	return filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return w.fsw.Add(p)
-		}
-		return nil
-	})
+// Start adds srcDir (and its subdirectories) to the OS watch list and
+// begins dispatching events.  Blocks until Stop is called.
+func (w *Watcher) Start() error {
+	if err := addRecursive(w.fw, w.srcDir); err != nil {
+		w.fw.Close()
+		return err
+	}
+	w.run()
+	return nil
 }
 
-// Events returns the channel on which FileEvents are delivered.
-func (w *Watcher) Events() <-chan protocol.FileEvent {
-	return w.events
-}
-
-// Stop shuts down the watcher and closes the Events channel.
+// Stop shuts down the watcher.
 func (w *Watcher) Stop() {
-	close(w.done)
-	w.fsw.Close()
+	close(w.stopCh)
+	w.fw.Close()
 }
 
-// loop is the main goroutine: reads raw fsnotify events, debounces, and emits.
-func (w *Watcher) loop() {
-	defer close(w.events)
+// run is the event loop: it merges events per path, debounces, then fires h.
+func (w *Watcher) run() {
+	timers := make(map[string]*time.Timer)
+	var mu sync.Mutex
+
+	fire := func(path string) {
+		mu.Lock()
+		delete(timers, path)
+		mu.Unlock()
+		w.handler(path)
+	}
+
 	for {
 		select {
-		case <-w.done:
+		case <-w.stopCh:
+			mu.Lock()
+			for _, t := range timers {
+				t.Stop()
+			}
+			mu.Unlock()
 			return
 
-		case ev, ok := <-w.fsw.Events:
+		case ev, ok := <-w.fw.Events:
 			if !ok {
 				return
 			}
-			if isIgnored(ev.Name) {
+			if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) == 0 {
 				continue
 			}
-			op := mapOp(ev.Op)
-			if op < 0 {
-				continue
-			}
-			w.debounce(ev.Name, protocol.Op(op))
+			abs := filepath.Clean(ev.Name)
 
-		case err, ok := <-w.fsw.Errors:
+			// If a new directory appeared, watch it too.
+			if ev.Op&fsnotify.Create != 0 {
+				w.fw.Add(abs)
+			}
+
+			mu.Lock()
+			if t, exists := timers[abs]; exists {
+				t.Reset(w.debounce)
+			} else {
+				p := abs
+				timers[abs] = time.AfterFunc(w.debounce, func() { fire(p) })
+			}
+			mu.Unlock()
+
+		case err, ok := <-w.fw.Errors:
 			if !ok {
 				return
 			}
-			log.Printf("[watcher] error: %v", err)
+			log.Printf("[watcher] %v", err)
 		}
 	}
 }
 
-// debounce resets the timer for path so that rapid consecutive writes
-// produce only one FileEvent after debounceDuration of silence.
-func (w *Watcher) debounce(path string, op protocol.Op) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	if t, ok := w.pending[path]; ok {
-		t.Stop()
-	}
-	w.pending[path] = time.AfterFunc(debounceDuration, func() {
-		w.mu.Lock()
-		delete(w.pending, path)
-		w.mu.Unlock()
-
-		select {
-		case w.events <- protocol.FileEvent{
-			Path:      path,
-			Operation: op,
-			Timestamp: time.Now(),
-		}:
-		case <-w.done:
+// addRecursive adds dir and every subdirectory to fw.
+func addRecursive(fw *fsnotify.Watcher, dir string) error {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return err
 		}
+		return fw.Add(path)
 	})
-}
-
-// isIgnored returns true if the file should never trigger a backup.
-func isIgnored(path string) bool {
-	base := filepath.Base(path)
-	for _, pat := range ignoredPatterns {
-		if strings.HasPrefix(base, pat) || strings.HasSuffix(base, pat) {
-			return true
-		}
-	}
-	return false
-}
-
-// mapOp converts an fsnotify.Op to the protocol.Op equivalent.
-// Returns -1 for operations we don't care about (Chmod).
-func mapOp(op fsnotify.Op) int {
-	switch {
-	case op&fsnotify.Create != 0:
-		return int(protocol.OpCreate)
-	case op&fsnotify.Write != 0:
-		return int(protocol.OpWrite)
-	case op&fsnotify.Remove != 0:
-		return int(protocol.OpDelete)
-	case op&fsnotify.Rename != 0:
-		return int(protocol.OpRename)
-	default:
-		return -1
-	}
 }
