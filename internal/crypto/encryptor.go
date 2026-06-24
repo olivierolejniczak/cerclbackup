@@ -41,6 +41,14 @@ func DeriveKey(password string, salt []byte) []byte {
 	)
 }
 
+// DeriveCircleKey derives a circle-specific master key.  The circleID is mixed
+// into the password with a null-byte separator so each circle has a unique key
+// even when two circles share the same Argon2 salt.
+func DeriveCircleKey(password, circleID string, salt []byte) []byte {
+	combined := password + "\x00" + circleID
+	return DeriveKey(combined, salt)
+}
+
 // NewSalt generates a cryptographically random salt for Argon2.
 func NewSalt() ([]byte, error) {
 	salt := make([]byte, SaltSize)

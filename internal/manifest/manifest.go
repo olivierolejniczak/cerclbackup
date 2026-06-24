@@ -121,11 +121,11 @@ func (m *Manifest) EncryptedBytes() ([]byte, error) {
 	return bbcrypto.Encrypt(m.masterKey, plaintext)
 }
 
-// Upsert creates or replaces the entry for the given file path.
-// contentHash must be the same hash used to derive the store fileID (fileHashFromChunks).
+// Upsert creates a new versioned entry for the given file path.
+// Each call creates a fresh FileID (UUID), increments the version number,
+// and preserves all previous versions for the same path.
+// Use PruneVersions to apply a retention policy.
 func (m *Manifest) Upsert(srcPath string, contentHash [32]byte, size int64, scheme protocol.RSScheme, shards []protocol.ShardLocation) (*protocol.ManifestEntry, error) {
-	hash := contentHash
-
 	info, err := os.Stat(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest: stat %q: %w", srcPath, err)
@@ -134,29 +134,178 @@ func (m *Manifest) Upsert(srcPath string, contentHash [32]byte, size int64, sche
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Reuse existing FileID if the path was already backed up.
-	fileID := ""
-	for id, e := range m.d.Entries {
+	// Determine the next version number by scanning existing entries.
+	nextVersion := 1
+	for _, e := range m.d.Entries {
 		if e.Path == srcPath {
-			fileID = id
-			break
+			v := e.Version
+			if v == 0 {
+				v = 1 // unversioned compat: treat as v1
+			}
+			if v >= nextVersion {
+				nextVersion = v + 1
+			}
 		}
 	}
-	if fileID == "" {
-		fileID = uuid.New().String()
-	}
 
+	fileID := uuid.New().String()
 	entry := &protocol.ManifestEntry{
 		FileID:   fileID,
 		Path:     srcPath,
-		Hash:     hex.EncodeToString(hash[:]),
+		Hash:     hex.EncodeToString(contentHash[:]),
 		Size:     size,
 		Modified: info.ModTime().UTC(),
 		Scheme:   scheme,
 		Shards:   shards,
+		Version:  nextVersion,
+		BackedAt: time.Now().UTC(),
 	}
 	m.d.Entries[fileID] = entry
 	return entry, nil
+}
+
+// ListVersions returns all versions for a given path, sorted oldest → newest.
+func (m *Manifest) ListVersions(path string) []*protocol.ManifestEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []*protocol.ManifestEntry
+	for _, e := range m.d.Entries {
+		if e.Path == path {
+			out = append(out, e)
+		}
+	}
+	sortByVersion(out)
+	return out
+}
+
+// Latest returns the most recent version of a file by path, or nil if not found.
+func (m *Manifest) Latest(path string) *protocol.ManifestEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var best *protocol.ManifestEntry
+	for _, e := range m.d.Entries {
+		if e.Path != path {
+			continue
+		}
+		if best == nil || versionOf(e) > versionOf(best) {
+			best = e
+		}
+	}
+	return best
+}
+
+// RetentionPolicy controls how many historical versions to keep per file.
+type RetentionPolicy struct {
+	KeepAllDays    int // keep every version within this many days (default 30)
+	KeepWeeklyDays int // keep one per week within this many days (default 90)
+	// Beyond KeepWeeklyDays: keep one per calendar month.
+	MaxVersions int // hard cap per file path; 0 means no cap (default 50)
+}
+
+// DefaultRetentionPolicy returns the recommended retention settings.
+func DefaultRetentionPolicy() RetentionPolicy {
+	return RetentionPolicy{KeepAllDays: 30, KeepWeeklyDays: 90, MaxVersions: 50}
+}
+
+// PruneVersions removes old versions from the in-memory manifest according to
+// policy.  Call Save() afterwards to persist the change.
+// Versions that are pruned are removed from m.d.Entries; the caller is
+// responsible for deleting the corresponding shards from buddies.
+// Returns the list of FileIDs that were pruned.
+func (m *Manifest) PruneVersions(policy RetentionPolicy) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now().UTC()
+
+	// Group entries by path.
+	byPath := make(map[string][]*protocol.ManifestEntry)
+	for _, e := range m.d.Entries {
+		byPath[e.Path] = append(byPath[e.Path], e)
+	}
+
+	var pruned []string
+	for _, versions := range byPath {
+		sortByVersion(versions)
+		keep := selectVersionsToKeep(versions, policy, now)
+		keepSet := make(map[string]bool, len(keep))
+		for _, e := range keep {
+			keepSet[e.FileID] = true
+		}
+		for _, e := range versions {
+			if !keepSet[e.FileID] {
+				delete(m.d.Entries, e.FileID)
+				pruned = append(pruned, e.FileID)
+			}
+		}
+	}
+	return pruned
+}
+
+func selectVersionsToKeep(versions []*protocol.ManifestEntry, policy RetentionPolicy, now time.Time) []*protocol.ManifestEntry {
+	if len(versions) == 0 {
+		return nil
+	}
+	// Always keep the most recent version.
+	keep := []*protocol.ManifestEntry{versions[len(versions)-1]}
+	seen := map[string]bool{versions[len(versions)-1].FileID: true}
+
+	for i := len(versions) - 2; i >= 0; i-- {
+		e := versions[i]
+		backedAt := e.BackedAt
+		if backedAt.IsZero() {
+			backedAt = e.Modified
+		}
+		age := now.Sub(backedAt)
+
+		switch {
+		case age <= time.Duration(policy.KeepAllDays)*24*time.Hour:
+			keep = append(keep, e)
+			seen[e.FileID] = true
+		case age <= time.Duration(policy.KeepWeeklyDays)*24*time.Hour:
+			// Keep one per ISO week.
+			yr, wk := backedAt.ISOWeek()
+			weekKey := fmt.Sprintf("%d-W%02d", yr, wk)
+			if !seen[weekKey] {
+				seen[weekKey] = true
+				keep = append(keep, e)
+				seen[e.FileID] = true
+			}
+		default:
+			// Keep one per calendar month.
+			monthKey := fmt.Sprintf("%d-%02d", backedAt.Year(), backedAt.Month())
+			if !seen[monthKey] {
+				seen[monthKey] = true
+				keep = append(keep, e)
+				seen[e.FileID] = true
+			}
+		}
+	}
+
+	sortByVersion(keep)
+
+	// Apply hard cap.
+	if policy.MaxVersions > 0 && len(keep) > policy.MaxVersions {
+		keep = keep[len(keep)-policy.MaxVersions:]
+	}
+	return keep
+}
+
+func versionOf(e *protocol.ManifestEntry) int {
+	if e.Version == 0 {
+		return 1
+	}
+	return e.Version
+}
+
+func sortByVersion(entries []*protocol.ManifestEntry) {
+	for i := 1; i < len(entries); i++ {
+		for j := i; j > 0 && versionOf(entries[j]) < versionOf(entries[j-1]); j-- {
+			entries[j], entries[j-1] = entries[j-1], entries[j]
+		}
+	}
 }
 
 // Get returns the manifest entry for fileID, or nil if absent.
