@@ -38,6 +38,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	"github.com/cerclbackup/cerclbackup/internal/circle"
 	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
+	bbexclude "github.com/cerclbackup/cerclbackup/internal/exclude"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
 	"github.com/cerclbackup/cerclbackup/internal/version"
@@ -101,6 +102,12 @@ func main() {
 		runRecover(os.Args[2:])
 	case "watch":
 		runWatch(os.Args[2:])
+	case "prune":
+		os.Exit(runPrune(os.Args[2:]))
+	case "storage":
+		os.Exit(runStorage(os.Args[2:]))
+	case "scrub":
+		os.Exit(runScrub(os.Args[2:]))
 	case "circle":
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
@@ -142,15 +149,27 @@ Commands (Phase 3 -- multi-circle & versioning):
 
 func runBackup(args []string) {
 	fs := flag.NewFlagSet("backup", flag.ExitOnError)
-	src := fs.String("src", "", "Source file to back up")
+	src      := fs.String("src", "", "Source file to back up")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
 	password := fs.String("password", "", "Encryption password")
-	buddies := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
+	buddies  := fs.Int("buddies", 5, "Number of simulated buddies (determines RS scheme)")
+	excl     := fs.String("exclude", "", "Comma-separated glob patterns to skip (e.g. '*.tmp,.git')")
 	_ = fs.Parse(args)
 
 	if *src == "" || *password == "" {
 		fs.Usage()
 		os.Exit(1)
+	}
+
+	if *excl != "" {
+		ef, err := bbexclude.Parse(*excl)
+		if err != nil {
+			log.Fatalf("[backup] --exclude: %v", err)
+		}
+		if ef.Match(*src) {
+			log.Printf("[backup] skipping excluded file: %s", *src)
+			return
+		}
 	}
 
 	// ── 1. Setup ──────────────────────────────────────────────────────────────
@@ -1328,6 +1347,223 @@ func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
 }
 
+// ── runPrune ────────────────────────────────────────────────────────────────
+
+func runPrune(args []string) int {
+	fs := flag.NewFlagSet("prune", flag.ExitOnError)
+	password    := fs.String("password", "", "Keystore password (required)")
+	keepAll     := fs.Int("keep-all-days", 30, "Keep every version within this many days")
+	keepWeekly  := fs.Int("keep-weekly-days", 90, "Keep one version/week within this many days")
+	maxVersions := fs.Int("max-versions", 50, "Hard cap: max versions per file path")
+	dryRun      := fs.Bool("dry-run", false, "Show what would be pruned without deleting")
+	storeDir    := fs.String("store", storage.DefaultStorePath(), "Local shard store")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "prune: --password is required")
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	mf := openManifest(ks.MasterKey())
+	if err := mf.Load(); err != nil {
+		log.Printf("prune: load manifest: %v", err)
+		return 1
+	}
+
+	policy := manifest.RetentionPolicy{
+		KeepAllDays:    *keepAll,
+		KeepWeeklyDays: *keepWeekly,
+		MaxVersions:    *maxVersions,
+	}
+
+	pruned := mf.PruneVersions(policy)
+	if len(pruned) == 0 {
+		fmt.Println("Nothing to prune.")
+		return 0
+	}
+
+	if *dryRun {
+		fmt.Printf("Would prune %d shard set(s):\n", len(pruned))
+		for _, id := range pruned {
+			fmt.Printf("  %s\n", id)
+		}
+		return 0
+	}
+
+	st, err := storage.New(*storeDir)
+	if err != nil {
+		log.Printf("prune: open store: %v", err)
+		return 1
+	}
+
+	deleted := 0
+	for _, fileID := range pruned {
+		if err := st.Delete(fileID); err != nil && !os.IsNotExist(err) {
+			log.Printf("prune: delete %s: %v", fileID, err)
+		} else {
+			deleted++
+		}
+	}
+
+	if err := mf.Save(); err != nil {
+		log.Printf("prune: save manifest: %v", err)
+		return 1
+	}
+
+	fmt.Printf("Pruned %d version(s), freed %d shard set(s) from store.\n", len(pruned), deleted)
+	return 0
+}
+
+// ── runStorage ───────────────────────────────────────────────────────────────
+
+func runStorage(args []string) int {
+	fs := flag.NewFlagSet("storage", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Local shard store")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "storage: --password is required")
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	mf := openManifest(ks.MasterKey())
+	if err := mf.Load(); err != nil {
+		log.Printf("storage: load manifest: %v", err)
+		return 1
+	}
+
+	entries := mf.All()
+
+	// Aggregate per-path stats.
+	type pathStat struct {
+		versions int
+		latest   int64
+	}
+	byPath := make(map[string]*pathStat)
+	var totalLogical int64
+	for _, e := range entries {
+		s := byPath[e.Path]
+		if s == nil {
+			s = &pathStat{}
+			byPath[e.Path] = s
+		}
+		s.versions++
+		if e.Version == 0 || func() bool {
+			lat := mf.Latest(e.Path)
+			return lat != nil && lat.FileID == e.FileID
+		}() {
+			s.latest = e.Size
+			totalLogical += e.Size
+		}
+	}
+
+	// Measure on-disk shard store footprint.
+	var diskBytes int64
+	filepath.WalkDir(*storeDir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			diskBytes += info.Size()
+		}
+		return nil
+	})
+
+	// Count files with multiple versions.
+	multiVersion := 0
+	for _, s := range byPath {
+		if s.versions > 1 {
+			multiVersion++
+		}
+	}
+
+	fmt.Printf("Manifest\n")
+	fmt.Printf("  Files tracked (unique paths) : %d\n", len(byPath))
+	fmt.Printf("  Total versions               : %d\n", len(entries))
+	fmt.Printf("  Files with >1 version        : %d\n", multiVersion)
+	fmt.Printf("  Logical size (latest only)   : %s\n", formatBytes(totalLogical))
+	fmt.Printf("\nLocal shard store (%s)\n", *storeDir)
+	fmt.Printf("  On-disk usage                : %s\n", formatBytes(diskBytes))
+	if totalLogical > 0 {
+		ratio := float64(diskBytes) / float64(totalLogical)
+		fmt.Printf("  Storage amplification        : %.2fx  (RS+encryption overhead)\n", ratio)
+	}
+	return 0
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+// ── runScrub ─────────────────────────────────────────────────────────────────
+
+func runScrub(args []string) int {
+	fs := flag.NewFlagSet("scrub", flag.ExitOnError)
+	password := fs.String("password", "", "Keystore password (required)")
+	_ = fs.Parse(args)
+
+	if *password == "" {
+		fmt.Fprintln(os.Stderr, "scrub: --password is required")
+		return 1
+	}
+
+	ks := openOrCreateKeystore(*password)
+	cfgDir, _ := os.UserConfigDir()
+	shardDir := filepath.Join(cfgDir, "cerclbackup", "shards")
+	bs := buddy.NewStore(shardDir)
+
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Printf("scrub: peer identity: %v", err)
+		return 1
+	}
+	h, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Printf("scrub: host: %v", err)
+		return 1
+	}
+	defer h.Close()
+
+	reg, err := openRegistry(ks)
+	if err != nil {
+		log.Printf("scrub: registry: %v", err)
+		return 1
+	}
+
+	mgr := scrubpkg.New(bs, h, reg)
+	fmt.Println("Running scrub pass...")
+	r, err := mgr.RunOnce(context.Background())
+	if err != nil {
+		log.Printf("scrub: %v", err)
+		return 1
+	}
+
+	fmt.Printf("Scrub complete\n")
+	fmt.Printf("  Checked   : %d shards\n", r.Checked)
+	fmt.Printf("  Healthy   : %d\n", r.OK)
+	fmt.Printf("  Corrupted : %d\n", r.Corrupted)
+	fmt.Printf("  Revived   : %d\n", r.Revived)
+	fmt.Printf("  Failed    : %d\n", r.Failed)
+
+	if r.Failed > 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: some shards could not be recovered.")
+		return 1
+	}
+	return 0
+}
+
 // runWatch monitors a directory tree and backs up each file when it settles.
 // It runs until interrupted (SIGINT/SIGTERM or Ctrl-C).
 func runWatch(args []string) {
@@ -1337,6 +1573,7 @@ func runWatch(args []string) {
 	password := fs.String("password", "", "Encryption password (required)")
 	buddies  := fs.Int("buddies", 1, "Reed-Solomon parity shards")
 	debounce := fs.Duration("debounce", 3*time.Second, "Quiet period before backup fires")
+	excl     := fs.String("exclude", ".git,node_modules,*.tmp,*.swp", "Comma-separated glob patterns to skip")
 	_ = fs.Parse(args)
 
 	if *srcDir == "" || *password == "" {
@@ -1344,14 +1581,21 @@ func runWatch(args []string) {
 		os.Exit(1)
 	}
 
+	ef, err := bbexclude.Parse(*excl)
+	if err != nil {
+		log.Fatalf("[watch] --exclude: %v", err)
+	}
+
 	// Pre-flight: open keystore once so bad passwords fail fast.
 	ks := openOrCreateKeystore(*password)
-	masterKey := ks.MasterKey()
-	_ = masterKey
+	_ = ks.MasterKey()
 
-	log.Printf("[watch] monitoring %s (debounce %s)", *srcDir, *debounce)
+	log.Printf("[watch] monitoring %s (debounce %s, exclude %q)", *srcDir, *debounce, *excl)
 
 	w, err := watcher.NewWithDebounce(*srcDir, *debounce, func(path string) {
+		if ef.Match(path) {
+			return
+		}
 		log.Printf("[watch] changed: %s", path)
 		runBackup([]string{
 			"--src", path,
