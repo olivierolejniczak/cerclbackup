@@ -37,6 +37,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/manifdist"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
 	"github.com/cerclbackup/cerclbackup/internal/circle"
+	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
@@ -182,8 +183,12 @@ func runBackup(args []string) {
 	shardCounter := 0
 
 	for _, chunk := range chunks {
+		// Compress before RS encoding; smaller shards → lower network + storage cost.
+		chunkBytes, err := bbcompress.Compress(chunk.Data)
+		must(err)
+
 		// RS encode: split this chunk into scheme.TotalShards() sub-shards.
-		rawShards, err := enc.SplitChunkToShards(chunk.Data)
+		rawShards, err := enc.SplitChunkToShards(chunkBytes)
 		must(err)
 
 		for si, shard := range rawShards {
@@ -215,6 +220,7 @@ func runBackup(args []string) {
 	must(err)
 	entry, err := mf.Upsert(*src, fileHash, info.Size(), scheme, shardLocations)
 	must(err)
+	entry.Compressed = true
 	must(mf.Save())
 
 	log.Printf("[backup] ✅ done — file-id: %s  shards: %d  scheme: %d/%d",
@@ -360,16 +366,24 @@ func runRestore(args []string) {
 		chunkData, err := enc.MergeShardToChunk(rawShards)
 		must(err)
 
-		// Trim RS padding from every chunk: non-last chunks are DefaultChunkSize,
-		// last chunk is entry.Size % DefaultChunkSize (or DefaultChunkSize if divisible).
-		expectedSize := chunker.DefaultChunkSize
-		if ci == numChunks-1 {
-			if rem := int(entry.Size) % chunker.DefaultChunkSize; rem != 0 {
-				expectedSize = rem
+		if entry.Compressed {
+			// Decompressed bytes are exact; no padding trim needed.
+			chunkData, err = bbcompress.Decompress(chunkData)
+			if err != nil {
+				log.Fatalf("[restore] decompress chunk %d: %v", ci, err)
 			}
-		}
-		if expectedSize < len(chunkData) {
-			chunkData = chunkData[:expectedSize]
+		} else {
+			// Trim RS padding from every chunk: non-last chunks are DefaultChunkSize,
+			// last chunk is entry.Size % DefaultChunkSize (or DefaultChunkSize if divisible).
+			expectedSize := chunker.DefaultChunkSize
+			if ci == numChunks-1 {
+				if rem := int(entry.Size) % chunker.DefaultChunkSize; rem != 0 {
+					expectedSize = rem
+				}
+			}
+			if expectedSize < len(chunkData) {
+				chunkData = chunkData[:expectedSize]
+			}
 		}
 
 		if _, err := outFile.Write(chunkData); err != nil {

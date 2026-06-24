@@ -132,6 +132,9 @@ type ManifestEntry struct {
 	Version int `json:"version,omitempty"`
 	// BackedAt is the time this version was committed.
 	BackedAt time.Time `json:"backed_at,omitempty"`
+	// Compressed indicates the chunk data was zstd-compressed before RS encoding.
+	// Clients must decompress after RS reconstruction. False for legacy backups.
+	Compressed bool `json:"compressed,omitempty"`
 }
 
 // ShardLocation records where one shard is stored.
