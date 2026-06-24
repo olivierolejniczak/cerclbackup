@@ -36,6 +36,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	"github.com/cerclbackup/cerclbackup/internal/manifdist"
 	"github.com/cerclbackup/cerclbackup/internal/manifest"
+	"github.com/cerclbackup/cerclbackup/internal/circle"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
@@ -94,6 +95,10 @@ func main() {
 		runShowPhrase(os.Args[2:])
 	case "recover":
 		runRecover(os.Args[2:])
+	case "circle":
+		os.Exit(runCircle(os.Args[2:]))
+	case "versions":
+		os.Exit(runVersions(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(1)
@@ -116,7 +121,16 @@ Commands (Phase 2a — P2P):
   revoke    --peer-id <id> --password <pwd>       remove a buddy and rebalance
   rebalance    --password <pwd> [--store <dir>]     redistribute shards to all buddies
   invite-email --to <email> --circle <name> --password <pwd> [--smtp-*]  email MFA invite
-  join-email   --payload <file> --words "<12 words>" --password <pwd>    accept email invite`)
+  join-email   --payload <file> --words "<12 words>" --password <pwd>    accept email invite
+  manifest-pull --buddy-addr <multiaddr> --password <pwd>               recover manifest from buddy
+  show-phrase   --password <pwd>                                         show 12-word recovery phrase
+  recover       --phrase "<12 words>" --password <pwd>                   restore identity from phrase
+
+Commands (Phase 3 -- multi-circle & versioning):
+  circle add  --name <n> --scheme <d/p> --password <pwd>
+  circle list --password <pwd>
+  circle rm   --name <n> --confirm-name <n> --password <pwd>
+  versions    --file <path> --password <pwd>                             list file version history`)
 }
 
 // ─── BACKUP ──────────────────────────────────────────────────────────────────
@@ -1239,4 +1253,138 @@ func runJoinEmail(args []string) {
 
 func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
+}
+
+// runCircle handles: circle add / circle list / circle rm
+func runCircle(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "Usage: cerclbackup circle <add|list|rm> [flags]\n")
+		return 1
+	}
+	sub := args[0]
+	rest := args[1:]
+
+	switch sub {
+	case "add":
+		fs := flag.NewFlagSet("circle add", flag.ExitOnError)
+		name := fs.String("name", "", "Circle name (required)")
+		scheme := fs.String("scheme", "3/2", "RS scheme data/parity")
+		password := fs.String("password", "", "Keystore password (required)")
+		fs.Parse(rest)
+		if *name == "" || *password == "" {
+			fmt.Fprintln(os.Stderr, "circle add: --name and --password are required")
+			return 1
+		}
+		ks, err := openKeystore(*password)
+		if err != nil {
+			log.Printf("circle add: %v", err)
+			return 1
+		}
+		mgr := circle.NewManager(ks, *password)
+		c, err := mgr.Add(*name, *scheme)
+		if err != nil {
+			log.Printf("circle add: %v", err)
+			return 1
+		}
+		fmt.Printf("Circle added: %s (id=%s scheme=%s)\n", c.Name, c.ID, c.Scheme)
+		return 0
+
+	case "list":
+		fs := flag.NewFlagSet("circle list", flag.ExitOnError)
+		password := fs.String("password", "", "Keystore password (required)")
+		fs.Parse(rest)
+		if *password == "" {
+			fmt.Fprintln(os.Stderr, "circle list: --password is required")
+			return 1
+		}
+		ks, err := openKeystore(*password)
+		if err != nil {
+			log.Printf("circle list: %v", err)
+			return 1
+		}
+		mgr := circle.NewManager(ks, *password)
+		circles, err := mgr.List()
+		if err != nil {
+			log.Printf("circle list: %v", err)
+			return 1
+		}
+		if len(circles) == 0 {
+			fmt.Println("No circles configured.")
+			return 0
+		}
+		fmt.Printf("%-24s %-36s %-6s %s\n", "NAME", "ID", "SCHEME", "CREATED")
+		for _, c := range circles {
+			fmt.Printf("%-24s %-36s %-6s %s\n", c.Name, c.ID, c.Scheme, c.CreatedAt.Format("2006-01-02"))
+		}
+		return 0
+
+	case "rm":
+		fs := flag.NewFlagSet("circle rm", flag.ExitOnError)
+		name := fs.String("name", "", "Circle name to remove (required)")
+		confirm := fs.String("confirm-name", "", "Must match --name to confirm deletion")
+		password := fs.String("password", "", "Keystore password (required)")
+		fs.Parse(rest)
+		if *name == "" || *password == "" {
+			fmt.Fprintln(os.Stderr, "circle rm: --name and --password are required")
+			return 1
+		}
+		if *confirm != *name {
+			fmt.Fprintf(os.Stderr, "circle rm: --confirm-name must equal %q\n", *name)
+			return 1
+		}
+		ks, err := openKeystore(*password)
+		if err != nil {
+			log.Printf("circle rm: %v", err)
+			return 1
+		}
+		mgr := circle.NewManager(ks, *password)
+		if err := mgr.Remove(*name); err != nil {
+			log.Printf("circle rm: %v", err)
+			return 1
+		}
+		fmt.Printf("Circle %q removed.\n", *name)
+		return 0
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown circle sub-command: %q\n", sub)
+		return 1
+	}
+}
+
+// runVersions lists all backed-up versions of a file.
+func runVersions(args []string) int {
+	fs := flag.NewFlagSet("versions", flag.ExitOnError)
+	filePath := fs.String("file", "", "Path of the backed-up file (required)")
+	password := fs.String("password", "", "Keystore password (required)")
+	fs.Parse(args)
+	if *filePath == "" || *password == "" {
+		fmt.Fprintln(os.Stderr, "versions: --file and --password are required")
+		return 1
+	}
+	ks, err := openKeystore(*password)
+	if err != nil {
+		log.Printf("versions: %v", err)
+		return 1
+	}
+	masterKey := ks.MasterKey()
+	manifestPath := manifest.DefaultManifestPath()
+	m := manifest.New(manifestPath, masterKey)
+	if err := m.Load(); err != nil {
+		log.Printf("versions: load manifest: %v", err)
+		return 1
+	}
+	versions := m.ListVersions(*filePath)
+	if len(versions) == 0 {
+		fmt.Printf("No versions found for: %s\n", *filePath)
+		return 0
+	}
+	fmt.Printf("%-4s %-26s %-64s %s\n", "VER", "BACKED AT", "FILE ID", "HASH")
+	for _, v := range versions {
+		backedAt := v.BackedAt.Format("2006-01-02 15:04:05 UTC")
+		if v.BackedAt.IsZero() {
+			backedAt = "(legacy)"
+		}
+		fmt.Printf("%-4d %-26s %-64s %s\n", v.Version, backedAt, v.FileID, v.Hash[:16]+"...")
+	}
+	return 0
 }

@@ -113,7 +113,7 @@ type EncodedShard struct {
 
 // ManifestEntry records all metadata needed to restore one file.
 type ManifestEntry struct {
-	// FileID is a UUID stable across versions of the same file.
+	// FileID is a UUID that uniquely identifies this specific version.
 	FileID string `json:"file_id"`
 	// Path is the original absolute path on the owner's machine.
 	Path string `json:"path"`
@@ -127,6 +127,11 @@ type ManifestEntry struct {
 	Scheme RSScheme `json:"scheme"`
 	// Shards lists the location of each encoded shard.
 	Shards []ShardLocation `json:"shards"`
+	// Version is the 1-based version number within this path's history.
+	// Zero means "unversioned" (entry created before Phase 3b).
+	Version int `json:"version,omitempty"`
+	// BackedAt is the time this version was committed.
+	BackedAt time.Time `json:"backed_at,omitempty"`
 }
 
 // ShardLocation records where one shard is stored.
