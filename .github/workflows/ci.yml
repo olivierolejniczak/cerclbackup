@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1 -timeout 120s
+
+  build-cross:
+    name: Cross-compile
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build linux/amd64
+        run: |
+          GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" \
+            -o dist/cerclbackup_linux_amd64 ./cmd/cerclbackup
+
+      - name: Build windows/amd64 CLI
+        run: |
+          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w" \
+            -o dist/cerclbackup_windows_amd64.exe ./cmd/cerclbackup
+
+      - name: Build windows/amd64 tray
+        run: |
+          GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -H=windowsgui" \
+            -o dist/cerclbackup-tray_windows_amd64.exe ./cmd/cerclbackup-tray
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 7

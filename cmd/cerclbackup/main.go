@@ -41,6 +41,7 @@ import (
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
 	"github.com/cerclbackup/cerclbackup/internal/version"
+	"github.com/cerclbackup/cerclbackup/internal/watcher"
 	"github.com/cerclbackup/cerclbackup/internal/rebalance"
 	scrubpkg "github.com/cerclbackup/cerclbackup/internal/scrub"
 	"github.com/cerclbackup/cerclbackup/internal/storage"
@@ -98,6 +99,8 @@ func main() {
 		runShowPhrase(os.Args[2:])
 	case "recover":
 		runRecover(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
 	case "circle":
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
@@ -261,15 +264,20 @@ func runBackup(args []string) {
 
 func runRestore(args []string) {
 	fs := flag.NewFlagSet("restore", flag.ExitOnError)
-	fileID := fs.String("file-id", "", "FileID from the manifest")
+	fileID   := fs.String("file-id", "", "FileID UUID from the manifest (legacy; prefer --file)")
+	filePath := fs.String("file", "", "Original file path to restore (looks up latest version)")
+	ver      := fs.Int("version", 0, "Version number to restore (0 = latest, requires --file)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
-	out := fs.String("out", "", "Output file path")
-	password := fs.String("password", "", "Encryption password")
+	out      := fs.String("out", "", "Output file path (required)")
+	password := fs.String("password", "", "Encryption password (required)")
 	_ = fs.Parse(args)
 
-	if *fileID == "" || *out == "" || *password == "" {
+	if *out == "" || *password == "" {
 		fs.Usage()
 		os.Exit(1)
+	}
+	if *fileID == "" && *filePath == "" {
+		log.Fatal("[restore] one of --file-id or --file is required")
 	}
 
 	store := mustStore(*storeDir)
@@ -277,9 +285,30 @@ func runRestore(args []string) {
 	masterKey := ks.MasterKey()
 	mf := openManifest(masterKey)
 
-	entry := mf.Get(*fileID)
-	if entry == nil {
-		log.Fatalf("[restore] file-id %q not found in manifest", *fileID)
+	var entry *protocol.ManifestEntry
+	switch {
+	case *fileID != "":
+		entry = mf.Get(*fileID)
+		if entry == nil {
+			log.Fatalf("[restore] file-id %q not found in manifest", *fileID)
+		}
+	case *ver > 0:
+		for _, e := range mf.ListVersions(*filePath) {
+			if e.Version == *ver {
+				entry = e
+				break
+			}
+		}
+		if entry == nil {
+			log.Fatalf("[restore] %q version %d not found in manifest", *filePath, *ver)
+		}
+	default:
+		entry = mf.Latest(*filePath)
+		if entry == nil {
+			log.Fatalf("[restore] %q not found in manifest", *filePath)
+		}
+		log.Printf("[restore] using latest version %d (backed %s)",
+			entry.Version, entry.BackedAt.Format("2006-01-02 15:04:05"))
 	}
 	log.Printf("[restore] restoring %q (%d bytes, scheme %d/%d) ...",
 		entry.Path, entry.Size, entry.Scheme.DataShards, entry.Scheme.ParityShards)
@@ -409,6 +438,7 @@ func runList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
 	password := fs.String("password", "", "Encryption password")
+	all      := fs.Bool("all", false, "Show all versions (default: latest per path only)")
 	_ = fs.Parse(args)
 
 	if *password == "" {
@@ -426,11 +456,31 @@ func runList(args []string) {
 		fmt.Println("No files backed up yet.")
 		return
 	}
-	fmt.Printf("%-36s  %-50s  %10s  %s\n", "FILE-ID", "PATH", "SIZE", "MODIFIED")
-	fmt.Println("─────────────────────────────────────────────────────────────────────────────────────────────────────────")
+
+	if !*all {
+		// Deduplicate: keep only the latest version per path.
+		latest := make(map[string]*protocol.ManifestEntry)
+		for _, e := range entries {
+			prev, ok := latest[e.Path]
+			if !ok || e.Version > prev.Version {
+				latest[e.Path] = e
+			}
+		}
+		entries = entries[:0]
+		for _, e := range latest {
+			entries = append(entries, e)
+		}
+	}
+
+	fmt.Printf("%-4s  %-36s  %-50s  %10s  %s\n", "VER", "FILE-ID", "PATH", "SIZE", "BACKED AT")
+	fmt.Println("─────────────────────────────────────────────────────────────────────────────────────────────────────────────────")
 	for _, e := range entries {
-		fmt.Printf("%-36s  %-50s  %10d  %s\n",
-			e.FileID, e.Path, e.Size, e.Modified.Format("2006-01-02 15:04:05"))
+		backedAt := e.BackedAt.Format("2006-01-02 15:04")
+		if e.BackedAt.IsZero() {
+			backedAt = e.Modified.Format("2006-01-02 15:04")
+		}
+		fmt.Printf("%-4d  %-36s  %-50s  %10d  %s\n",
+			e.Version, e.FileID, e.Path, e.Size, backedAt)
 	}
 }
 
@@ -1276,6 +1326,56 @@ func runJoinEmail(args []string) {
 
 func sha256Sum(data []byte) [32]byte {
 	return sha256.Sum256(data)
+}
+
+// runWatch monitors a directory tree and backs up each file when it settles.
+// It runs until interrupted (SIGINT/SIGTERM or Ctrl-C).
+func runWatch(args []string) {
+	fs := flag.NewFlagSet("watch", flag.ExitOnError)
+	srcDir   := fs.String("src", "", "Directory to monitor (required)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
+	password := fs.String("password", "", "Encryption password (required)")
+	buddies  := fs.Int("buddies", 1, "Reed-Solomon parity shards")
+	debounce := fs.Duration("debounce", 3*time.Second, "Quiet period before backup fires")
+	_ = fs.Parse(args)
+
+	if *srcDir == "" || *password == "" {
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Pre-flight: open keystore once so bad passwords fail fast.
+	ks := openOrCreateKeystore(*password)
+	masterKey := ks.MasterKey()
+	_ = masterKey
+
+	log.Printf("[watch] monitoring %s (debounce %s)", *srcDir, *debounce)
+
+	w, err := watcher.NewWithDebounce(*srcDir, *debounce, func(path string) {
+		log.Printf("[watch] changed: %s", path)
+		runBackup([]string{
+			"--src", path,
+			"--store", *storeDir,
+			"--password", *password,
+			"--buddies", fmt.Sprintf("%d", *buddies),
+		})
+	})
+	if err != nil {
+		log.Fatalf("[watch] init: %v", err)
+	}
+
+	// Handle SIGINT / SIGTERM for clean shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt)
+	go func() {
+		<-sigCh
+		log.Println("[watch] shutting down...")
+		w.Stop()
+	}()
+
+	if err := w.Start(); err != nil {
+		log.Fatalf("[watch] %v", err)
+	}
 }
 
 // runCircle handles: circle add / circle list / circle rm
