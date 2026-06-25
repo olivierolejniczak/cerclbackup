@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -606,7 +607,14 @@ func openOrCreateKeystore(password string) *bbcrypto.Keystore {
 
 func openManifest(masterKey []byte) *manifest.Manifest {
 	mf := manifest.New(manifest.DefaultManifestPath(), masterKey)
-	must(mf.Load())
+	if err := mf.Load(); err != nil {
+		if strings.Contains(err.Error(), "message authentication failed") {
+			log.Fatal("manifest: decryption failed — the keystore master key does not match.\n" +
+				"  This usually means 'cerclbackup init' was run after a backup was already created.\n" +
+				"  To start fresh: cerclbackup init --force  (WARNING: deletes existing backup metadata)")
+		}
+		log.Fatalf("manifest: %v", err)
+	}
 	return mf
 }
 
@@ -1478,9 +1486,10 @@ func sha256Sum(data []byte) [32]byte {
 
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	password  := fs.String("password", "", "Keystore password (skips interactive prompt)")
-	noPrompt  := fs.Bool("no-prompt", false, "Skip all interactive prompts (for scripted use)")
-	storeDir  := fs.String("store", storage.DefaultStorePath(), "Shard store directory to create")
+	password := fs.String("password", "", "Keystore password (skips interactive prompt)")
+	noPrompt := fs.Bool("no-prompt", false, "Skip all interactive prompts (for scripted use)")
+	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store directory to create")
+	force    := fs.Bool("force", false, "Overwrite existing keystore and manifest (WARNING: loses access to previous backups)")
 	_ = fs.Parse(args)
 
 	// ── 1. Password ──────────────────────────────────────────────────────────
@@ -1519,6 +1528,18 @@ func runInit(args []string) int {
 		return 1
 	}
 	ksPath := filepath.Join(ksDir, "keystore.enc")
+
+	if _, err := os.Stat(ksPath); err == nil {
+		if !*force {
+			fmt.Fprintln(os.Stderr, "error: keystore already exists at", ksPath)
+			fmt.Fprintln(os.Stderr, "       Run 'cerclbackup init --force' to reinitialize.")
+			fmt.Fprintln(os.Stderr, "       WARNING: --force deletes all existing backup metadata.")
+			return 1
+		}
+		// Remove keystore and manifest so they cannot decrypt with the new master key.
+		os.Remove(ksPath)
+		os.Remove(manifest.DefaultManifestPath())
+	}
 
 	ks := bbcrypto.NewKeystore(ksPath)
 	if err := ks.Create(pw); err != nil {
