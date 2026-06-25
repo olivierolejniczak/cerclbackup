@@ -62,8 +62,13 @@ try {
     # ── 3. Build MSI with WiX v4 ─────────────────────────────────────────────
     $MsiOut = "$BinDir\cerclbackup-setup-$Version.msi"
 
+    Write-Host "==> Installing WiX UI extension ..."
+    & wix extension add WixToolset.UI.wixext --global
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
     Write-Host "==> Building MSI $MsiOut ..."
     & wix build installer\cerclbackup.wxs `
+         -ext WixToolset.UI.wixext `
          -d "BinDir=$BinDir" `
          -d "ProductVersion=$MsiVersion" `
          -o $MsiOut
