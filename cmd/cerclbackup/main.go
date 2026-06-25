@@ -2215,10 +2215,8 @@ func runDoctor(args []string) int {
 	}
 
 	// 7. Disk space
-	var stat syscall.Statfs_t
 	checkDir := *storeDir
-	if err := syscall.Statfs(checkDir, &stat); err == nil {
-		free := stat.Bavail * uint64(stat.Bsize)
+	if free, ok := diskFreeBytes(checkDir); ok {
 		add("disk space", free > 100*1024*1024,
 			fmt.Sprintf("%s free in %s", formatBytes(int64(free)), checkDir))
 	}
