@@ -23,13 +23,14 @@ func main() {
 }
 
 func onReady() {
-	systray.SetIcon(iconPNG())
+	systray.SetIcon(iconICO())
 	systray.SetTitle("CerclBackup")
 	systray.SetTooltip("CerclBackup - P2P encrypted backup")
 
 	mStatus := systray.AddMenuItem("Status: checking...", "Last backup status")
 	mStatus.Disable()
 	systray.AddSeparator()
+	mSetup := systray.AddMenuItem("Initialize...", "First-time setup: create keystore and add buddy")
 	mBackup := systray.AddMenuItem("Backup Now", "Run backup immediately")
 	mLogs := systray.AddMenuItem("Open Logs", "Open log directory")
 	systray.AddSeparator()
@@ -38,6 +39,8 @@ func onReady() {
 	go func() {
 		for {
 			select {
+			case <-mSetup.ClickedCh:
+				openSetup()
 			case <-mBackup.ClickedCh:
 				go runBackup(mStatus)
 			case <-mLogs.ClickedCh:
@@ -137,6 +140,27 @@ func runBackup(mStatus *systray.MenuItem) {
 		return
 	}
 	updateStatus(mStatus)
+}
+
+// openSetup opens a terminal window running "cerclbackup init" so the user
+// can create their keystore on first run. On Windows we use cmd.exe /K so
+// the window stays open after the command finishes.
+func openSetup() {
+	bin, err := siblingBinary("cerclbackup")
+	if err != nil {
+		return
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd.exe", "/C", "start", "cmd.exe", "/K", bin, "init")
+	case "darwin":
+		script := "tell application \"Terminal\" to do script \"" + bin + " init\""
+		cmd = exec.Command("osascript", "-e", script)
+	default:
+		cmd = exec.Command("x-terminal-emulator", "-e", bin, "init")
+	}
+	cmd.Start()
 }
 
 // openLogs opens the cerclbackup log directory in the OS file browser.
