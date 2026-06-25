@@ -63,12 +63,12 @@ try {
     $MsiOut = "$BinDir\cerclbackup-setup-$Version.msi"
 
     Write-Host "==> Installing WiX UI extension ..."
-    & wix extension add WixToolset.UI.wixext --global
+    & wix extension add WixToolset.UI.wixext/4.0.5 --global
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     Write-Host "==> Building MSI $MsiOut ..."
     & wix build installer\cerclbackup.wxs `
-         -ext WixToolset.UI.wixext `
+         -ext WixToolset.UI.wixext/4.0.5 `
          -d "BinDir=$BinDir" `
          -d "ProductVersion=$MsiVersion" `
          -o $MsiOut
