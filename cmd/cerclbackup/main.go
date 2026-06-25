@@ -201,14 +201,12 @@ func runBackup(args []string) {
 		p2pmod.SetUploadRate(*uploadKbps * 1024)
 	}
 
+	var ef *bbexclude.Filter
 	if *excl != "" {
-		ef, err := bbexclude.Parse(*excl)
+		var err error
+		ef, err = bbexclude.Parse(*excl)
 		if err != nil {
 			log.Fatalf("[backup] --exclude: %v", err)
-		}
-		if ef.Match(*src) {
-			log.Printf("[backup] skipping excluded file: %s", *src)
-			return
 		}
 	}
 
@@ -226,64 +224,31 @@ func runBackup(args []string) {
 	log.Printf("[backup] RS scheme: %d data / %d parity (tolerates %d buddy failures)",
 		scheme.DataShards, scheme.ParityShards, scheme.ParityShards)
 
-	// ── 3. Chunk the file ─────────────────────────────────────────────────────
-	log.Printf("[backup] chunking %q ...", *src)
-	chunks, err := chunker.ChunkFile(*src, chunker.DefaultChunkSize)
-	must(err)
-	log.Printf("[backup] %d chunk(s) of %d MB", len(chunks), chunker.DefaultChunkSize/1024/1024)
-
-	// ── 4. Derive file key ────────────────────────────────────────────────────
-	// Hash is over all chunk hashes concatenated to represent the file content.
-	fileHash := fileHashFromChunks(chunks)
-	fileKey, err := bbcrypto.DeriveFileKey(masterKey, fileHash)
-	must(err)
-
-	// ── 5. Reed-Solomon encode + AES-256-GCM encrypt each chunk ──────────────
-	enc, err := codec.NewEncoder(scheme)
-	must(err)
-
-	var shardLocations []protocol.ShardLocation
-	shardCounter := 0
-
-	for _, chunk := range chunks {
-		// Compress before RS encoding; smaller shards → lower network + storage cost.
-		chunkBytes, err := bbcompress.Compress(chunk.Data)
-		must(err)
-
-		// RS encode: split this chunk into scheme.TotalShards() sub-shards.
-		rawShards, err := enc.SplitChunkToShards(chunkBytes)
-		must(err)
-
-		for si, shard := range rawShards {
-			isParity := si >= scheme.DataShards
-			globalShardIdx := shardCounter
-			shardCounter++
-
-			// AES-GCM encrypt.
-			ciphertext, err := bbcrypto.EncryptShard(fileKey, globalShardIdx, shard)
-			must(err)
-
-			// Persist to local store (Phase 1 — all shards go locally).
-			// In Phase 2 each shard will be sent to a different buddy.
-			fileID := fileIDFromHash(fileHash)
-			storageKey := fmt.Sprintf("chunk%d-shard%d", chunk.Index, si)
-			must(store.Put(fileID, globalShardIdx, isParity, ciphertext))
-
-			shardLocations = append(shardLocations, protocol.ShardLocation{
-				ShardIndex: globalShardIdx,
-				IsParity:   isParity,
-				BuddyID:    "local", // Phase 1 placeholder
-				StorageKey: storageKey,
-			})
+	// ── 3. Walk src (file or directory) and back up each file ───────────────
+	var lastFile string
+	walkErr := filepath.Walk(*src, func(path string, fi os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
+		if fi.IsDir() {
+			return nil
+		}
+		if ef != nil && ef.Match(path) {
+			log.Printf("[backup] skip (excluded): %s", path)
+			return nil
+		}
+		if err := backupOneFile(path, fi, store, ks, *password, masterKey, mf, scheme); err != nil {
+			log.Printf("[backup] %s: %v", path, err)
+		} else {
+			lastFile = path
+		}
+		return nil
+	})
+	if walkErr != nil {
+		log.Fatalf("[backup] walk %q: %v", *src, walkErr)
 	}
 
-	// ── 6. Update manifest ────────────────────────────────────────────────────
-	info, err := os.Stat(*src)
-	must(err)
-	entry, err := mf.Upsert(*src, fileHash, info.Size(), scheme, shardLocations)
-	must(err)
-	entry.Compressed = true
+	// ── 4. Save manifest ─────────────────────────────────────────────────────
 	must(mf.Save())
 
 	if *autoPrune {
@@ -301,20 +266,16 @@ func runBackup(args []string) {
 	}
 
 	// Write tray status so the systray app can show last-backup time.
-	if cfgDir, err := os.UserConfigDir(); err == nil {
-		st := traystatus.Status{LastBackupAt: time.Now().UTC(), LastFile: *src}
-		if werr := traystatus.Write(filepath.Join(cfgDir, "cerclbackup"), st); werr != nil {
-			log.Printf("[backup] status write: %v", werr)
+	if lastFile != "" {
+		if cfgDir, err := os.UserConfigDir(); err == nil {
+			st := traystatus.Status{LastBackupAt: time.Now().UTC(), LastFile: lastFile}
+			if werr := traystatus.Write(filepath.Join(cfgDir, "cerclbackup"), st); werr != nil {
+				log.Printf("[backup] status write: %v", werr)
+			}
 		}
 	}
 
-	log.Printf("[backup] ✅ done — file-id: %s  shards: %d  scheme: %d/%d",
-		entry.FileID, len(shardLocations), scheme.DataShards, scheme.ParityShards)
-
-	// -- 7. Push shards to buddies (Phase 2b) -----------------------------------------------
-	pushToBuddies(ks, *password, fileIDFromHash(fileHash), shardLocations, store)
-
-	// -- 8. Push encrypted manifest to connected buddies (Phase 2i) -------------------------
+	// ── 5. Push encrypted manifest to connected buddies (Phase 2i) ──────────
 	blob, err := mf.EncryptedBytes()
 	if err != nil {
 		log.Printf("[backup] manifest encrypt: %v (skipping buddy push)", err)
@@ -331,6 +292,73 @@ func runBackup(args []string) {
 			}
 		}
 	}
+}
+
+// backupOneFile chunks, Reed-Solomon encodes, encrypts and stores a single
+// file, then adds it to the manifest. Shard pushes to buddies happen inline.
+func backupOneFile(src string, fi os.FileInfo, store *storage.Store, ks *bbcrypto.Keystore, password string, masterKey []byte, mf *manifest.Manifest, scheme protocol.RSScheme) error {
+	log.Printf("[backup] chunking %q ...", src)
+	chunks, err := chunker.ChunkFile(src, chunker.DefaultChunkSize)
+	if err != nil {
+		return fmt.Errorf("chunk: %w", err)
+	}
+	log.Printf("[backup] %d chunk(s)", len(chunks))
+
+	fileHash := fileHashFromChunks(chunks)
+	fileKey, err := bbcrypto.DeriveFileKey(masterKey, fileHash)
+	if err != nil {
+		return fmt.Errorf("derive key: %w", err)
+	}
+
+	enc, err := codec.NewEncoder(scheme)
+	if err != nil {
+		return fmt.Errorf("encoder: %w", err)
+	}
+
+	var shardLocations []protocol.ShardLocation
+	shardCounter := 0
+
+	for _, chunk := range chunks {
+		chunkBytes, err := bbcompress.Compress(chunk.Data)
+		if err != nil {
+			return fmt.Errorf("compress chunk %d: %w", chunk.Index, err)
+		}
+		rawShards, err := enc.SplitChunkToShards(chunkBytes)
+		if err != nil {
+			return fmt.Errorf("RS encode chunk %d: %w", chunk.Index, err)
+		}
+		fileID := fileIDFromHash(fileHash)
+		for si, shard := range rawShards {
+			isParity := si >= scheme.DataShards
+			idx := shardCounter
+			shardCounter++
+			ciphertext, err := bbcrypto.EncryptShard(fileKey, idx, shard)
+			if err != nil {
+				return fmt.Errorf("encrypt shard: %w", err)
+			}
+			if err := store.Put(fileID, idx, isParity, ciphertext); err != nil {
+				return fmt.Errorf("store shard: %w", err)
+			}
+			shardLocations = append(shardLocations, protocol.ShardLocation{
+				ShardIndex: idx,
+				IsParity:   isParity,
+				BuddyID:    "local",
+				StorageKey: fmt.Sprintf("chunk%d-shard%d", chunk.Index, si),
+			})
+		}
+	}
+
+	entry, err := mf.Upsert(src, fileHash, fi.Size(), scheme, shardLocations)
+	if err != nil {
+		return fmt.Errorf("manifest upsert: %w", err)
+	}
+	entry.Compressed = true
+
+	log.Printf("[backup] ✅ %s — file-id: %s  shards: %d",
+		filepath.Base(src), entry.FileID, len(shardLocations))
+
+	pushToBuddies(ks, password, fileIDFromHash(fileHash), shardLocations, store)
+	return nil
 }
 
 // ─── RESTORE ─────────────────────────────────────────────────────────────────
