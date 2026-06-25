@@ -9,6 +9,8 @@ jobs:
   build:
     name: Build release artifacts
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -18,14 +20,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # WiX v4 is available as a .NET global tool.
-      - name: Install WiX v4
-        run: dotnet tool install --global wix
-
       - name: Extract version from tag
         id: version
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      # WiX v4 is a .NET global tool; add its install dir to PATH for subsequent steps.
+      - name: Install WiX v4
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --allow-downgrade
+          "$env:USERPROFILE\.dotnet\tools" |
+            Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Build binaries + MSI
         shell: pwsh
