@@ -15,3 +15,5 @@ secrets/
 keystore.enc
 manifest.enc
 cerclbackup_linux_amd64
+/cerclbackup
+/cerclbackup-tray

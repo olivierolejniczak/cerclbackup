@@ -319,7 +319,7 @@ func backupOneFile(src string, fi os.FileInfo, store *storage.Store, ks *bbcrypt
 	shardCounter := 0
 
 	for _, chunk := range chunks {
-		chunkBytes, err := bbcompress.Compress(chunk.Data)
+		chunkBytes, err := bbcompress.Compress(chunk.Data[:chunk.Size])
 		if err != nil {
 			return fmt.Errorf("compress chunk %d: %w", chunk.Index, err)
 		}
@@ -512,7 +512,6 @@ func runRestore(args []string) {
 		must(err)
 
 		if entry.Compressed {
-			// Decompressed bytes are exact; no padding trim needed.
 			chunkData, err = bbcompress.Decompress(chunkData)
 			if err != nil {
 				log.Fatalf("[restore] decompress chunk %d: %v", ci, err)
@@ -1564,9 +1563,11 @@ func runInit(args []string) int {
 			fmt.Fprintln(os.Stderr, "       WARNING: --force deletes all existing backup metadata.")
 			return 1
 		}
-		// Remove keystore and manifest so they cannot decrypt with the new master key.
+		// Remove keystore, manifest, and shard store — all three are
+		// keyed to the old master key and cannot be used after reinit.
 		os.Remove(ksPath)
 		os.Remove(manifest.DefaultManifestPath())
+		os.RemoveAll(storage.DefaultStorePath())
 	}
 
 	ks := bbcrypto.NewKeystore(ksPath)
