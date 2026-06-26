@@ -36,6 +36,9 @@ type keystoreJSON struct {
 // On Windows: %APPDATA%\CerclBackup\keystore.enc
 // On Linux/WSL: ~/.config/cerclbackup/keystore.enc
 func DefaultKeystorePath() string {
+	if d := os.Getenv("CERCLBACKUP_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "keystore.enc")
+	}
 	if appdata := os.Getenv("APPDATA"); appdata != "" {
 		return filepath.Join(appdata, "CerclBackup", "keystore.enc")
 	}

@@ -21,6 +21,9 @@ import (
 
 // DefaultManifestPath returns the platform-appropriate default path.
 func DefaultManifestPath() string {
+	if d := os.Getenv("CERCLBACKUP_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "manifest.enc")
+	}
 	if appdata := os.Getenv("APPDATA"); appdata != "" {
 		return filepath.Join(appdata, "CerclBackup", "manifest.enc")
 	}
