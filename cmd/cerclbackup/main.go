@@ -941,13 +941,28 @@ func runInvite(args []string) {
 		verbally = fmt.Sprintf("%s %s %s", wlist[len(wlist)-3], wlist[len(wlist)-2], wlist[len(wlist)-1])
 	}
 
-	// Build the join command the buddy should run.  Pick the first non-loopback
-	// address for the example; include all so the user can choose.
+	// Build the join command the buddy should run.
+	// Priority: real LAN (192.168/10./172.[16-31].) > loopback > anything else.
+	// Skip link-local (169.254.x.x) — those are APIPA/virtual-adapter addresses
+	// that are unreachable even on the same machine.
 	joinAddr := ""
 	for _, a := range addrs {
-		if !strings.Contains(a, "/127.0.0.1/") {
-			joinAddr = a
-			break
+		if strings.Contains(a, "/169.254.") {
+			continue
+		}
+		if strings.Contains(a, "/127.0.0.1/") || strings.Contains(a, "/::1/") {
+			continue
+		}
+		joinAddr = a
+		break
+	}
+	if joinAddr == "" {
+		// Fall back to loopback — always reachable on the same machine.
+		for _, a := range addrs {
+			if strings.Contains(a, "/127.0.0.1/tcp/") {
+				joinAddr = a
+				break
+			}
 		}
 	}
 	if joinAddr == "" && len(addrs) > 0 {
