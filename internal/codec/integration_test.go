@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"fmt"
 	"testing"
 
 	"github.com/cerclbackup/cerclbackup/internal/codec"
@@ -120,6 +121,106 @@ func TestFullBackupRestorePipeline(t *testing.T) {
 
 			if restoreFileHash != fileHash {
 				t.Fatalf("merkle hash mismatch\n  backup:  %x\n  restore: %x", fileHash, restoreFileHash)
+			}
+		})
+	}
+}
+
+// TestParityRecovery verifies that Reed-Solomon can reconstruct the original
+// data when up to ParityShards shards are lost (set to nil).  Every
+// combination of lost shards up to the parity limit is exercised.
+func TestParityRecovery(t *testing.T) {
+	scheme := protocol.RSScheme{DataShards: 3, ParityShards: 2}
+	enc, err := codec.NewEncoder(scheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := make([]byte, 4096)
+	rand.Read(original)
+
+	masterKey := make([]byte, 32)
+	rand.Read(masterKey)
+
+	chunkHash := sha256.Sum256(original)
+	fileHasher := sha256.New()
+	fileHasher.Write(chunkHash[:])
+	var fileHash [32]byte
+	copy(fileHash[:], fileHasher.Sum(nil))
+
+	fileKey, err := bbcrypto.DeriveFileKey(masterKey, fileHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	compressed, err := compress.Compress(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shards, err := enc.SplitChunkToShards(compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	totalShards := scheme.DataShards + scheme.ParityShards
+
+	// Encrypt all shards once; store ciphertexts for reuse across subtests.
+	ciphertexts := make([][]byte, totalShards)
+	for i, shard := range shards {
+		ct, err := bbcrypto.EncryptShard(fileKey, i, shard)
+		if err != nil {
+			t.Fatalf("EncryptShard %d: %v", i, err)
+		}
+		ciphertexts[i] = ct
+	}
+
+	// Generate all combinations of up to ParityShards lost indices.
+	type combo struct {
+		lost []int
+	}
+	var combos []combo
+	combos = append(combos, combo{nil}) // no loss
+	for i := 0; i < totalShards; i++ {
+		combos = append(combos, combo{[]int{i}})
+		for j := i + 1; j < totalShards; j++ {
+			combos = append(combos, combo{[]int{i, j}})
+		}
+	}
+
+	for _, c := range combos {
+		lostSet := make(map[int]bool, len(c.lost))
+		for _, idx := range c.lost {
+			lostSet[idx] = true
+		}
+		name := fmt.Sprintf("lost=%v", c.lost)
+
+		t.Run(name, func(t *testing.T) {
+			decShards := make([][]byte, totalShards)
+			for i, ct := range ciphertexts {
+				if lostSet[i] {
+					decShards[i] = nil // simulate missing shard
+					continue
+				}
+				pt, err := bbcrypto.DecryptShard(fileKey, i, ct)
+				if err != nil {
+					t.Fatalf("DecryptShard %d: %v", i, err)
+				}
+				decShards[i] = pt
+			}
+
+			merged, err := enc.MergeShardToChunk(decShards)
+			if err != nil {
+				t.Fatalf("MergeShardToChunk: %v", err)
+			}
+
+			restored, err := compress.Decompress(merged)
+			if err != nil {
+				t.Fatalf("Decompress: %v", err)
+			}
+
+			if !bytes.Equal(restored, original) {
+				t.Fatalf("data mismatch after recovering lost shards %v", c.lost)
 			}
 		})
 	}
