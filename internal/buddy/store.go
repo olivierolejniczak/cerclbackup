@@ -105,6 +105,9 @@ type ShardRef struct {
 // ListAll walks the store and returns a reference for every shard present.
 func (s *Store) ListAll() ([]ShardRef, error) {
 	root := filepath.Join(s.root, "remote")
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return nil, nil // no remote shards yet — not an error
+	}
 	var refs []ShardRef
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
