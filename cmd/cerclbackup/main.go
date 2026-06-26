@@ -272,9 +272,9 @@ func runBackup(args []string) {
 
 	// Write tray status so the systray app can show last-backup time.
 	if lastFile != "" {
-		if cfgDir, err := os.UserConfigDir(); err == nil {
+		if cfgDir, err := cerclConfigDir(); err == nil {
 			st := traystatus.Status{LastBackupAt: time.Now().UTC(), LastFile: lastFile}
-			if werr := traystatus.Write(filepath.Join(cfgDir, "cerclbackup"), st); werr != nil {
+			if werr := traystatus.Write(cfgDir, st); werr != nil {
 				log.Printf("[backup] status write: %v", werr)
 			}
 		}
@@ -626,7 +626,8 @@ func mustStore(dir string) *storage.Store {
 }
 
 func openOrCreateKeystore(password string) *bbcrypto.Keystore {
-	ksPath := bbcrypto.DefaultKeystorePath()
+	cfgDir, _ := cerclConfigDir()
+	ksPath := filepath.Join(cfgDir, "keystore.enc")
 	ks := bbcrypto.NewKeystore(ksPath)
 	if _, err := os.Stat(ksPath); os.IsNotExist(err) {
 		log.Printf("[keystore] creating new keystore at %s", ksPath)
@@ -678,15 +679,32 @@ func hexToHash(s string) ([32]byte, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Config-dir helper
+// ---------------------------------------------------------------------------
+
+// cerclConfigDir returns the root directory for all CerclBackup data files.
+// Override with CERCLBACKUP_CONFIG_DIR for testing or multi-instance setups.
+func cerclConfigDir() (string, error) {
+	if d := os.Getenv("CERCLBACKUP_CONFIG_DIR"); d != "" {
+		return d, nil
+	}
+	base, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "cerclbackup"), nil
+}
+
+// ---------------------------------------------------------------------------
 // P2P helpers
 // ---------------------------------------------------------------------------
 
 func openKeystore(password string) (*bbcrypto.Keystore, error) {
-	cfgDir, err := os.UserConfigDir()
+	cfgDir, err := cerclConfigDir()
 	if err != nil {
 		return nil, err
 	}
-	ksPath := filepath.Join(cfgDir, "cerclbackup", "keystore.enc")
+	ksPath := filepath.Join(cfgDir, "keystore.enc")
 	ks := bbcrypto.NewKeystore(ksPath)
 	if err := ks.Unlock(password); err != nil {
 		return nil, fmt.Errorf("keystore unlock: %w", err)
@@ -695,17 +713,17 @@ func openKeystore(password string) (*bbcrypto.Keystore, error) {
 }
 
 func openRegistry(ks *bbcrypto.Keystore) (*buddy.Registry, error) {
-	cfgDir, err := os.UserConfigDir()
+	cfgDir, err := cerclConfigDir()
 	if err != nil {
 		return nil, err
 	}
-	regPath := filepath.Join(cfgDir, "cerclbackup", "buddies.enc")
+	regPath := filepath.Join(cfgDir, "buddies.enc")
 	return buddy.NewRegistry(regPath, ks.MasterKey())
 }
 
 func openInviteManager() *invite.Manager {
-	cfgDir, _ := os.UserConfigDir()
-	invPath := filepath.Join(cfgDir, "cerclbackup", "invites.json")
+	cfgDir, _ := cerclConfigDir()
+	invPath := filepath.Join(cfgDir, "invites.json")
 	return invite.NewManager(invPath)
 }
 
@@ -751,14 +769,14 @@ func runServe(args []string) {
 		log.Fatal(err)
 	}
 
-	cfgDir, _ := os.UserConfigDir()
-	storeDir := filepath.Join(cfgDir, "cerclbackup", "shards")
+	cfgDir, _ := cerclConfigDir()
+	storeDir := filepath.Join(cfgDir, "shards")
 	bs := buddy.NewStore(storeDir)
 	invMgr := openInviteManager()
 
 	p2pmod.RegisterHandlers(h, reg, bs, invMgr)
 
-	q := p2pmod.NewQueue(filepath.Join(cfgDir, "cerclbackup", "queue.json"))
+	q := p2pmod.NewQueue(filepath.Join(cfgDir, "queue.json"))
 	if _, err := p2pmod.StartMDNS(h, reg, q); err != nil {
 		log.Printf("[serve] mDNS start: %v", err)
 	}
@@ -1062,8 +1080,8 @@ func pushToBuddies(ks *bbcrypto.Keystore, password, fileID string, locs []protoc
 		return
 	}
 
-	cfgDir, _ := os.UserConfigDir()
-	q := p2pmod.NewQueue(filepath.Join(cfgDir, "cerclbackup", "queue.json"))
+	cfgDir, _ := cerclConfigDir()
+	q := p2pmod.NewQueue(filepath.Join(cfgDir, "queue.json"))
 	ownerID := h.ID().String()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -1549,12 +1567,12 @@ func runInit(args []string) int {
 	}
 
 	// ── 2. Create keystore ───────────────────────────────────────────────────
-	cfgDir, err := os.UserConfigDir()
+	cfgDir, err := cerclConfigDir()
 	if err != nil {
 		log.Printf("init: config dir: %v", err)
 		return 1
 	}
-	ksDir := filepath.Join(cfgDir, "cerclbackup")
+	ksDir := cfgDir
 	if err := os.MkdirAll(ksDir, 0o700); err != nil {
 		log.Printf("init: mkdir: %v", err)
 		return 1
@@ -2218,8 +2236,8 @@ func runDoctor(args []string) int {
 
 	// 5. Last backup age
 	if ks != nil {
-		cfgDir, _ := os.UserConfigDir()
-		st2, err := traystatus.Read(filepath.Join(cfgDir, "cerclbackup"))
+		cfgDir, _ := cerclConfigDir()
+		st2, err := traystatus.Read(cfgDir)
 		if err != nil || st2.LastBackupAt.IsZero() {
 			add("last backup", false, "no backup recorded yet")
 		} else {
@@ -2489,8 +2507,8 @@ func runScrub(args []string) int {
 	}
 
 	ks := openOrCreateKeystore(*password)
-	cfgDir, _ := os.UserConfigDir()
-	shardDir := filepath.Join(cfgDir, "cerclbackup", "shards")
+	cfgDir, _ := cerclConfigDir()
+	shardDir := filepath.Join(cfgDir, "shards")
 	bs := buddy.NewStore(shardDir)
 
 	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)

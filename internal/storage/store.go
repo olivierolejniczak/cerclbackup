@@ -20,6 +20,9 @@ import (
 
 // DefaultStorePath returns a sensible default root directory.
 func DefaultStorePath() string {
+	if d := os.Getenv("CERCLBACKUP_CONFIG_DIR"); d != "" {
+		return filepath.Join(d, "store")
+	}
 	if appdata := os.Getenv("APPDATA"); appdata != "" {
 		return filepath.Join(appdata, "CerclBackup", "store")
 	}
