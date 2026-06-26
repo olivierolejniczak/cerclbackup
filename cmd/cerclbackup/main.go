@@ -2740,7 +2740,22 @@ func runVersions(args []string) int {
 // Credential Manager, macOS Keychain, Linux Secret Service).  It is intended
 // to be opened in a terminal by the tray app so the password never has to be
 // typed on the command line or stored in a plain-text file.
-func runSetPassword(_ []string) int {
+func runSetPassword(args []string) int {
+	fs := flag.NewFlagSet("set-password", flag.ExitOnError)
+	del := fs.Bool("delete", false, "Remove the stored password from the credential store")
+	_ = fs.Parse(args)
+
+	if *del {
+		if err := keyring.Delete(); err != nil {
+			fmt.Fprintln(os.Stderr, "error: could not delete from credential store:", err)
+			return 1
+		}
+		fmt.Println("Password removed from credential store.")
+		return 0
+	}
+
+	// When stdin is not a terminal (e.g. piped in a test), promptPassword falls
+	// back to reading a plain line — no echo suppression needed.
 	pass, err := promptPassword("Enter CerclBackup password: ")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: could not read password:", err)
