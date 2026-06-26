@@ -564,7 +564,7 @@ func runRestore(args []string) {
 func runList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Store directory")
-	password := fs.String("password", "", "Encryption password")
+	password := fs.String("password", cfg.Password, "Encryption password")
 	all      := fs.Bool("all", false, "Show all versions (default: latest per path only)")
 	_ = fs.Parse(args)
 
