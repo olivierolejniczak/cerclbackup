@@ -975,19 +975,19 @@ func runInvite(args []string) {
 	}
 
 	fmt.Println()
-	fmt.Println("── Your addresses (share ONE with your buddy) ──────────────────────────")
+	fmt.Println("── Step 1 — Send this command to your buddy (chat, email, etc.) ────────")
+	fmt.Printf("  cerclbackup join --addr %s --words %q%s --password <their-pw>\n",
+		joinAddr, words, nameFlag)
+	fmt.Println()
+	fmt.Println("── Step 2 — Verify by voice or in person (prevents interception) ───────")
+	fmt.Printf("  Tell your buddy your last 3 words: %s\n", verbally)
+	fmt.Println("  Your buddy must confirm these match before running the command above.")
+	fmt.Println()
+	fmt.Println("── All your addresses (if buddy needs a different one) ──────────────────")
 	for _, a := range addrs {
 		fmt.Printf("  %s\n", a)
 	}
 	fmt.Println()
-	fmt.Println("── Invite code (give to your buddy) ────────────────────────────────────")
-	fmt.Printf("  %s\n", words)
-	fmt.Println()
-	fmt.Println("── Your buddy should run ───────────────────────────────────────────────")
-	fmt.Printf("  cerclbackup join --addr %s --words %q%s --password <their-pw>\n",
-		joinAddr, words, nameFlag)
-	fmt.Println()
-	fmt.Printf("Verbally confirm the LAST 3 WORDS with your buddy: %q\n", verbally)
 	fmt.Printf("Code expires in 24 hours.\n")
 }
 
