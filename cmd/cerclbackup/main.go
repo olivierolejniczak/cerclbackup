@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"io"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -732,11 +733,26 @@ func openInviteManager() *invite.Manager {
 // serve
 // ---------------------------------------------------------------------------
 
+// serveLogFilter is a log.Writer that drops known-noisy lines emitted by
+// third-party libraries (zeroconf, quic-go) that use log.Printf directly and
+// therefore cannot be silenced via ipfs/go-log subsystem levels.
+type serveLogFilter struct{ out io.Writer }
+
+func (f *serveLogFilter) Write(p []byte) (int, error) {
+	s := string(p)
+	if strings.Contains(s, "Failed to set multicast interface") ||
+		strings.Contains(s, "failed to sufficiently increase receive buffer size") {
+		return len(p), nil
+	}
+	return f.out.Write(p)
+}
+
 func runServe(args []string) {
-	// Suppress WARN/INFO noise from libp2p subsystems that are chatty on
-	// Windows (mDNS multicast failures on virtual adapters, DHT churn).
-	ipfslog.SetLogLevel("mdns", "error")      //nolint:errcheck
-	ipfslog.SetLogLevel("dht", "error")       //nolint:errcheck
+	// Silence noisy third-party log lines that use the standard log package.
+	log.SetOutput(&serveLogFilter{out: os.Stderr})
+	// Silence ipfs/go-log subsystems that are verbose during normal operation.
+	ipfslog.SetLogLevel("mdns", "error")             //nolint:errcheck
+	ipfslog.SetLogLevel("dht", "error")              //nolint:errcheck
 	ipfslog.SetLogLevel("dht/RtRefreshManager", "error") //nolint:errcheck
 
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
