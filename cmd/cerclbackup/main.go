@@ -841,7 +841,7 @@ func runServe(args []string) {
 
 func runInvite(args []string) {
 	fs := flag.NewFlagSet("invite", flag.ExitOnError)
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -898,7 +898,7 @@ func runJoin(args []string) {
 	fs := flag.NewFlagSet("join", flag.ExitOnError)
 	addr := fs.String("addr", "", "full multiaddr of the inviter, e.g. /ip4/1.2.3.4/tcp/7742/p2p/<peerID>")
 	words := fs.String("words", "", "12-word invite mnemonic from your buddy")
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	name := fs.String("name", "", "friendly name for this buddy (optional)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -963,7 +963,7 @@ func runBuddyLegacy(args []string) {
 	}
 
 	fs := flag.NewFlagSet("buddy list", flag.ExitOnError)
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	if err := fs.Parse(args[1:]); err != nil {
 		log.Fatal(err)
 	}
@@ -1004,7 +1004,7 @@ func runBuddyLegacy(args []string) {
 func runRevoke(args []string) {
 	fs := flag.NewFlagSet("revoke", flag.ExitOnError)
 	peerID := fs.String("peer-id", "", "peer ID to remove (required)")
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -1146,7 +1146,7 @@ func tryFetchFromBuddies(ctx context.Context, h host.Host, reg *buddy.Registry, 
 
 func runRebalance(args []string) {
 	fs := flag.NewFlagSet("rebalance", flag.ExitOnError)
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "local shard store directory")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
@@ -1230,7 +1230,7 @@ func rebalanceWithKeystore(ks *bbcrypto.Keystore, password string) {
 func runManifestPull(args []string) {
 	fs := flag.NewFlagSet("manifest-pull", flag.ExitOnError)
 	buddyAddr := fs.String("addr", "", "Buddy multiaddr (required, e.g. /ip4/1.2.3.4/tcp/7742/p2p/<peerID>)")
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	out := fs.String("out", manifest.DefaultManifestPath(), "Output path for recovered manifest")
 	_ = fs.Parse(args)
 	if *buddyAddr == "" || *password == "" {
@@ -1290,7 +1290,7 @@ func runManifestPull(args []string) {
 
 func runShowPhrase(args []string) {
 	fs := flag.NewFlagSet("show-phrase", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	_ = fs.Parse(args)
 	if *password == "" {
 		fs.Usage()
@@ -1324,7 +1324,7 @@ func runShowPhrase(args []string) {
 func runRecover(args []string) {
 	fs := flag.NewFlagSet("recover", flag.ExitOnError)
 	phrase := fs.String("phrase", "", "12-word recovery phrase (required)")
-	password := fs.String("password", "", "New keystore password (required)")
+	password := fs.String("password", cfg.Password, "New keystore password (required)")
 	_ = fs.Parse(args)
 	if *phrase == "" || *password == "" {
 		fs.Usage()
@@ -1365,7 +1365,7 @@ func runInviteEmail(args []string) {
 	fs := flag.NewFlagSet("invite-email", flag.ExitOnError)
 	to := fs.String("to", "", "recipient email address (required)")
 	circle := fs.String("circle", "CerclBackup", "circle name shown in email")
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	smtpHost := fs.String("smtp-host", "", "SMTP host (omit to print email to stdout)")
 	smtpPort := fs.Int("smtp-port", 587, "SMTP port")
 	smtpUser := fs.String("smtp-user", "", "SMTP username")
@@ -1444,7 +1444,7 @@ func runJoinEmail(args []string) {
 	fs := flag.NewFlagSet("join-email", flag.ExitOnError)
 	payloadFile := fs.String("payload", "", "path to invite JSON file (required)")
 	wordsStr := fs.String("words", "", "12-word OOB code received out-of-band (required)")
-	password := fs.String("password", "", "keystore password (required)")
+	password := fs.String("password", cfg.Password, "keystore password (required)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -1518,7 +1518,7 @@ func sha256Sum(data []byte) [32]byte {
 
 func runInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (skips interactive prompt)")
+	password := fs.String("password", cfg.Password, "Keystore password (skips interactive prompt)")
 	noPrompt := fs.Bool("no-prompt", false, "Skip all interactive prompts (for scripted use)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store directory to create")
 	force    := fs.Bool("force", false, "Overwrite existing keystore and manifest (WARNING: loses access to previous backups)")
@@ -1707,7 +1707,7 @@ func runBuddyRm(args []string) int {
 
 func runBuddyStatus(args []string) int {
 	fs := flag.NewFlagSet("buddy status", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	timeout  := fs.Duration("timeout", 5*time.Second, "Connect timeout per buddy")
 	_ = fs.Parse(args)
 
@@ -1804,7 +1804,7 @@ func runBuddyStatus(args []string) int {
 
 func runAudit(args []string) int {
 	fs := flag.NewFlagSet("audit", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store to audit")
 	_ = fs.Parse(args)
 
@@ -1901,7 +1901,7 @@ func runExport(args []string) int {
 	filePath := fs.String("file", "", "File path to export (required)")
 	ver      := fs.Int("version", 0, "Version to export (0 = latest)")
 	out      := fs.String("out", "", "Output .cbk file (default: <name>_v<N>_<date>.cbk)")
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store")
 	_ = fs.Parse(args)
 
@@ -1979,7 +1979,7 @@ func runExport(args []string) int {
 func runImport(args []string) int {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
 	cbk      := fs.String("file", "", ".cbk archive to import (required)")
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store")
 	_ = fs.Parse(args)
 
@@ -2046,7 +2046,7 @@ func runImport(args []string) int {
 
 func runDiff(args []string) int {
 	fs := flag.NewFlagSet("diff", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	since    := fs.String("since", "", "Show changes since this time (RFC3339 or YYYY-MM-DD)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Shard store (for deleted detection)")
 	_ = fs.Parse(args)
@@ -2144,7 +2144,7 @@ func runDiff(args []string) int {
 
 func runDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
-	password     := fs.String("password", "", "Keystore password (required)")
+	password     := fs.String("password", cfg.Password, "Keystore password (required)")
 	storeDir     := fs.String("store", storage.DefaultStorePath(), "Shard store")
 	checkBuddies := fs.Bool("check-buddies", true, "Probe buddy connectivity")
 	maxAge       := fs.Duration("max-age", 25*time.Hour, "Warn if last backup is older than this")
@@ -2307,7 +2307,7 @@ func promptPassword(prompt string) (string, error) {
 
 func runPrune(args []string) int {
 	fs := flag.NewFlagSet("prune", flag.ExitOnError)
-	password    := fs.String("password", "", "Keystore password (required)")
+	password    := fs.String("password", cfg.Password, "Keystore password (required)")
 	keepAll     := fs.Int("keep-all-days", 30, "Keep every version within this many days")
 	keepWeekly  := fs.Int("keep-weekly-days", 90, "Keep one version/week within this many days")
 	maxVersions := fs.Int("max-versions", 50, "Hard cap: max versions per file path")
@@ -2375,7 +2375,7 @@ func runPrune(args []string) int {
 
 func runStorage(args []string) int {
 	fs := flag.NewFlagSet("storage", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	storeDir := fs.String("store", storage.DefaultStorePath(), "Local shard store")
 	_ = fs.Parse(args)
 
@@ -2480,7 +2480,7 @@ func formatBytes(b int64) string {
 
 func runScrub(args []string) int {
 	fs := flag.NewFlagSet("scrub", flag.ExitOnError)
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	_ = fs.Parse(args)
 
 	if *password == "" {
@@ -2612,7 +2612,7 @@ func runCircle(args []string) int {
 		fs := flag.NewFlagSet("circle add", flag.ExitOnError)
 		name := fs.String("name", "", "Circle name (required)")
 		scheme := fs.String("scheme", "3/2", "RS scheme data/parity")
-		password := fs.String("password", "", "Keystore password (required)")
+		password := fs.String("password", cfg.Password, "Keystore password (required)")
 		fs.Parse(rest)
 		if *name == "" || *password == "" {
 			fmt.Fprintln(os.Stderr, "circle add: --name and --password are required")
@@ -2634,7 +2634,7 @@ func runCircle(args []string) int {
 
 	case "list":
 		fs := flag.NewFlagSet("circle list", flag.ExitOnError)
-		password := fs.String("password", "", "Keystore password (required)")
+		password := fs.String("password", cfg.Password, "Keystore password (required)")
 		fs.Parse(rest)
 		if *password == "" {
 			fmt.Fprintln(os.Stderr, "circle list: --password is required")
@@ -2665,7 +2665,7 @@ func runCircle(args []string) int {
 		fs := flag.NewFlagSet("circle rm", flag.ExitOnError)
 		name := fs.String("name", "", "Circle name to remove (required)")
 		confirm := fs.String("confirm-name", "", "Must match --name to confirm deletion")
-		password := fs.String("password", "", "Keystore password (required)")
+		password := fs.String("password", cfg.Password, "Keystore password (required)")
 		fs.Parse(rest)
 		if *name == "" || *password == "" {
 			fmt.Fprintln(os.Stderr, "circle rm: --name and --password are required")
@@ -2698,7 +2698,7 @@ func runCircle(args []string) int {
 func runVersions(args []string) int {
 	fs := flag.NewFlagSet("versions", flag.ExitOnError)
 	filePath := fs.String("file", "", "Path of the backed-up file (required)")
-	password := fs.String("password", "", "Keystore password (required)")
+	password := fs.String("password", cfg.Password, "Keystore password (required)")
 	fs.Parse(args)
 	if *filePath == "" || *password == "" {
 		fmt.Fprintln(os.Stderr, "versions: --file and --password are required")
