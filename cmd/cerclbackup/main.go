@@ -61,6 +61,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 	"github.com/cerclbackup/cerclbackup/pkg/wire"
 	"github.com/multiformats/go-multiaddr"
+	ipfslog "github.com/ipfs/go-log/v2"
 )
 
 // cfg holds values loaded from the user's config.yaml, applied as flag defaults.
@@ -732,6 +733,12 @@ func openInviteManager() *invite.Manager {
 // ---------------------------------------------------------------------------
 
 func runServe(args []string) {
+	// Suppress WARN/INFO noise from libp2p subsystems that are chatty on
+	// Windows (mDNS multicast failures on virtual adapters, DHT churn).
+	ipfslog.SetLogLevel("mdns", "error")      //nolint:errcheck
+	ipfslog.SetLogLevel("dht", "error")       //nolint:errcheck
+	ipfslog.SetLogLevel("dht/RtRefreshManager", "error") //nolint:errcheck
+
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	password   := fs.String("password", cfg.Password, "keystore password (required)")
 	port       := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
