@@ -81,6 +81,10 @@ func identitySeedFromMnemonic(mnemonic string) ([]byte, error) {
 }
 
 func main() {
+	// Suppress third-party log.Printf noise that cannot be filtered via
+	// ipfs/go-log subsystem levels (zeroconf multicast, quic-go buffer).
+	log.SetOutput(&serveLogFilter{out: os.Stderr})
+
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
@@ -748,8 +752,6 @@ func (f *serveLogFilter) Write(p []byte) (int, error) {
 }
 
 func runServe(args []string) {
-	// Silence noisy third-party log lines that use the standard log package.
-	log.SetOutput(&serveLogFilter{out: os.Stderr})
 	// Silence ipfs/go-log subsystems that are verbose during normal operation.
 	ipfslog.SetLogLevel("mdns", "error")             //nolint:errcheck
 	ipfslog.SetLogLevel("dht", "error")              //nolint:errcheck
@@ -882,7 +884,9 @@ func runServe(args []string) {
 
 func runInvite(args []string) {
 	fs := flag.NewFlagSet("invite", flag.ExitOnError)
-	password := fs.String("password", cfg.Password, "keystore password (required)")
+	password  := fs.String("password", cfg.Password, "keystore password (required)")
+	servePort := fs.Int("port", 7742, "port your cerclbackup serve is listening on")
+	name      := fs.String("name", "", "friendly name to show your buddy (optional)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -891,9 +895,38 @@ func runInvite(args []string) {
 		os.Exit(1)
 	}
 
-	if _, err := openKeystore(*password); err != nil {
+	ks, err := openKeystore(*password)
+	if err != nil {
 		log.Fatal(err)
 	}
+
+	privKey, err := p2pmod.EnsurePeerIdentity(ks, *password)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Open a temporary host on a random port just to collect local interface
+	// addresses, then replace the random port with the real serve port.
+	tmpHost, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		log.Fatal(err)
+	}
+	peerID := tmpHost.ID().String()
+	var addrs []string
+	for _, ma := range tmpHost.Addrs() {
+		s := ma.String()
+		// Keep only IPv4 and IPv6 routable/loopback addresses; skip QUIC duplicates.
+		if strings.Contains(s, "/udp/") {
+			continue
+		}
+		// Replace the random port with the real serve port.
+		parts := strings.Split(s, "/tcp/")
+		if len(parts) == 2 {
+			s = parts[0] + fmt.Sprintf("/tcp/%d", *servePort)
+		}
+		addrs = append(addrs, s+"/p2p/"+peerID)
+	}
+	tmpHost.Close()
 
 	invMgr := openInviteManager()
 	code, err := invMgr.Generate()
@@ -902,15 +935,44 @@ func runInvite(args []string) {
 	}
 
 	words := code.Words
-	// split and show last 3 for verbal confirmation
 	wlist := splitWords(words)
 	verbally := ""
 	if len(wlist) >= 3 {
 		verbally = fmt.Sprintf("%s %s %s", wlist[len(wlist)-3], wlist[len(wlist)-2], wlist[len(wlist)-1])
 	}
 
-	fmt.Printf("Invite code (give to your buddy):\n\n  %s\n\n", words)
-	fmt.Printf("Ask your buddy to verbally confirm the LAST 3 WORDS: %q\n", verbally)
+	// Build the join command the buddy should run.  Pick the first non-loopback
+	// address for the example; include all so the user can choose.
+	joinAddr := ""
+	for _, a := range addrs {
+		if !strings.Contains(a, "/127.0.0.1/") {
+			joinAddr = a
+			break
+		}
+	}
+	if joinAddr == "" && len(addrs) > 0 {
+		joinAddr = addrs[0]
+	}
+
+	nameFlag := ""
+	if *name != "" {
+		nameFlag = fmt.Sprintf(" --name %q", *name)
+	}
+
+	fmt.Println()
+	fmt.Println("── Your addresses (share ONE with your buddy) ──────────────────────────")
+	for _, a := range addrs {
+		fmt.Printf("  %s\n", a)
+	}
+	fmt.Println()
+	fmt.Println("── Invite code (give to your buddy) ────────────────────────────────────")
+	fmt.Printf("  %s\n", words)
+	fmt.Println()
+	fmt.Println("── Your buddy should run ───────────────────────────────────────────────")
+	fmt.Printf("  cerclbackup join --addr %s --words %q%s --password <their-pw>\n",
+		joinAddr, words, nameFlag)
+	fmt.Println()
+	fmt.Printf("Verbally confirm the LAST 3 WORDS with your buddy: %q\n", verbally)
 	fmt.Printf("Code expires in 24 hours.\n")
 }
 
