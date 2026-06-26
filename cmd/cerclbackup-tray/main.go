@@ -18,13 +18,13 @@ import (
 
 	"fyne.io/systray"
 
+	"github.com/cerclbackup/cerclbackup/internal/keyring"
 	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
 )
 
 // daemon manages the cerclbackup serve and watch child processes.
 type daemon struct {
-	exe      string
-	password string
+	exe string
 
 	mu       sync.Mutex
 	watchSrc string
@@ -36,13 +36,21 @@ type daemon struct {
 	mWatch *systray.MenuItem
 }
 
-func newDaemon(exe, password, watchSrc string) *daemon {
+func newDaemon(exe, watchSrc string) *daemon {
 	return &daemon{
 		exe:      exe,
-		password: password,
 		watchSrc: watchSrc,
 		quit:     make(chan struct{}),
 	}
+}
+
+// readPassword returns the backup password from the OS keyring, falling back
+// to the CERCLBACKUP_PASSWORD environment variable.
+func readPassword() string {
+	if p, err := keyring.Get(); err == nil && p != "" {
+		return p
+	}
+	return os.Getenv("CERCLBACKUP_PASSWORD")
 }
 
 // stop signals all loops to exit and kills child processes.
@@ -75,6 +83,8 @@ func killProcess(cmd *exec.Cmd) {
 }
 
 // runServe starts cerclbackup serve in a restart loop (5 s back-off).
+// The password is re-read from the keyring on each (re)start so a freshly
+// stored credential is picked up without restarting the tray.
 func (d *daemon) runServe(logDir string) {
 	const backoff = 5 * time.Second
 	for {
@@ -84,11 +94,19 @@ func (d *daemon) runServe(logDir string) {
 		default:
 		}
 
-		args := []string{"serve"}
-		if d.password != "" {
-			args = append(args, "--password", d.password)
+		if readPassword() == "" {
+			d.mServe.SetTitle("Serve: use 'Set password...' first")
+			select {
+			case <-d.quit:
+				return
+			case <-time.After(10 * time.Second):
+			}
+			continue
 		}
-		cmd := exec.Command(d.exe, args...)
+
+		// The CLI reads the password from the keyring / env itself.
+		cmd := exec.Command(d.exe, "serve")
+		cmd.Env = os.Environ()
 		hideWindow(cmd)
 		attachLog(cmd, filepath.Join(logDir, "serve.log"))
 
@@ -120,7 +138,8 @@ func (d *daemon) runServe(logDir string) {
 }
 
 // runWatch starts cerclbackup watch in a restart loop (10 s back-off).
-// Polls every 5 s when no folder is configured yet.
+// Re-reads the password from the keyring each iteration so a freshly stored
+// credential is picked up without restarting the tray.
 func (d *daemon) runWatch(logDir string) {
 	const backoff = 10 * time.Second
 	for {
@@ -133,18 +152,21 @@ func (d *daemon) runWatch(logDir string) {
 		d.mu.Lock()
 		src := d.watchSrc
 		d.mu.Unlock()
+		password := readPassword()
 
-		if src == "" || d.password == "" {
-			d.mWatch.SetTitle(watchLabel(src, d.password))
+		if src == "" || password == "" {
+			d.mWatch.SetTitle(watchLabel(src, password))
 			select {
 			case <-d.quit:
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(10 * time.Second):
 			}
 			continue
 		}
 
-		cmd := exec.Command(d.exe, "watch", "--src", src, "--password", d.password)
+		// The CLI reads the password from the keyring / env itself.
+		cmd := exec.Command(d.exe, "watch", "--src", src)
+		cmd.Env = os.Environ()
 		hideWindow(cmd)
 		attachLog(cmd, filepath.Join(logDir, "watch.log"))
 
@@ -205,9 +227,9 @@ func onReady() {
 	os.MkdirAll(logDir, 0o700)
 
 	cfg, _ := traystatus.ReadConfig(cfgDir)
-	password := os.Getenv("CERCLBACKUP_PASSWORD")
+	password := readPassword()
 
-	dm = newDaemon(exe, password, cfg.WatchSrc)
+	dm = newDaemon(exe, cfg.WatchSrc)
 
 	// Status items — display only (always disabled).
 	mStatus := systray.AddMenuItem("Status: checking...", "Last backup status")
@@ -219,10 +241,11 @@ func onReady() {
 	systray.AddSeparator()
 
 	// Action items.
-	mSetup  := systray.AddMenuItem("Initialize...", "First-time setup: create keystore")
-	mBackup := systray.AddMenuItem("Backup Now", "Run an immediate backup")
-	mFolder := systray.AddMenuItem("Set backup folder...", "Choose the directory to auto-backup")
-	mLogs   := systray.AddMenuItem("Open Logs", "Open log directory")
+	mSetup    := systray.AddMenuItem("Initialize...", "First-time setup: create keystore")
+	mPassword := systray.AddMenuItem("Set password...", "Save backup password to credential store")
+	mBackup   := systray.AddMenuItem("Backup Now", "Run an immediate backup")
+	mFolder   := systray.AddMenuItem("Set backup folder...", "Choose the directory to auto-backup")
+	mLogs     := systray.AddMenuItem("Open Logs", "Open log directory")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Stop CerclBackup tray and daemons")
 
@@ -241,6 +264,8 @@ func onReady() {
 			select {
 			case <-mSetup.ClickedCh:
 				openSetup()
+			case <-mPassword.ClickedCh:
+				openSetPassword(exe)
 			case <-mBackup.ClickedCh:
 				go runBackup(mStatus)
 			case <-mFolder.ClickedCh:
@@ -339,9 +364,9 @@ func runBackup(mStatus *systray.MenuItem) {
 		mStatus.SetTitle("Status: cerclbackup not found")
 		return
 	}
-	password := os.Getenv("CERCLBACKUP_PASSWORD")
+	password := readPassword()
 	if password == "" {
-		mStatus.SetTitle("Status: set CERCLBACKUP_PASSWORD")
+		mStatus.SetTitle("Status: use 'Set password...' first")
 		return
 	}
 	// Prefer CERCLBACKUP_SRC env var; fall back to configured watch folder.
@@ -403,6 +428,25 @@ func pickFolder() (string, error) {
 		log.Println("tray: folder picker only supported on Windows")
 		return "", nil
 	}
+}
+
+// openSetPassword opens a terminal running "cerclbackup set-password" so the
+// user can store their password in the OS credential store interactively.
+func openSetPassword(bin string) {
+	if bin == "" {
+		return
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("cmd.exe", "/C", "start", "cmd.exe", "/K", bin, "set-password")
+	case "darwin":
+		script := `tell application "Terminal" to do script "` + bin + ` set-password"`
+		cmd = exec.Command("osascript", "-e", script)
+	default:
+		cmd = exec.Command("x-terminal-emulator", "-e", bin, "set-password")
+	}
+	cmd.Start()
 }
 
 func openSetup() {
