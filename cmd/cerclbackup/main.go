@@ -47,6 +47,7 @@ import (
 	"github.com/cerclbackup/cerclbackup/internal/archive"
 	bbcompress "github.com/cerclbackup/cerclbackup/internal/compress"
 	bbexclude "github.com/cerclbackup/cerclbackup/internal/exclude"
+	"github.com/cerclbackup/cerclbackup/internal/keyring"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
 	traystatus "github.com/cerclbackup/cerclbackup/internal/tray"
 	"github.com/cerclbackup/cerclbackup/internal/version"
@@ -84,8 +85,10 @@ func main() {
 	}
 
 	cfg = cerclConfig.Load()
-	// Password from env always beats config file.
+	// Password resolution order: env var → OS keyring → config file.
 	if p := os.Getenv("CERCLBACKUP_PASSWORD"); p != "" {
+		cfg.Password = p
+	} else if p, err := keyring.Get(); err == nil && p != "" {
 		cfg.Password = p
 	}
 
@@ -146,6 +149,8 @@ func main() {
 		os.Exit(runCircle(os.Args[2:]))
 	case "versions":
 		os.Exit(runVersions(os.Args[2:]))
+	case "set-password":
+		os.Exit(runSetPassword(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(1)
@@ -2730,6 +2735,30 @@ func runVersions(args []string) int {
 // ---------------------------------------------------------------------------
 // passwd -- change keystore password
 // ---------------------------------------------------------------------------
+
+// runSetPassword stores the backup password in the OS keyring (Windows
+// Credential Manager, macOS Keychain, Linux Secret Service).  It is intended
+// to be opened in a terminal by the tray app so the password never has to be
+// typed on the command line or stored in a plain-text file.
+func runSetPassword(_ []string) int {
+	pass, err := promptPassword("Enter CerclBackup password: ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error: could not read password:", err)
+		return 1
+	}
+	if pass == "" {
+		fmt.Fprintln(os.Stderr, "error: password cannot be empty")
+		return 1
+	}
+	if err := keyring.Set(pass); err != nil {
+		fmt.Fprintln(os.Stderr, "error: could not save to credential store:", err)
+		fmt.Fprintln(os.Stderr, "  Tip: set the CERCLBACKUP_PASSWORD environment variable instead.")
+		return 1
+	}
+	fmt.Println("Password saved to credential store.")
+	fmt.Println("The tray app will use it automatically on next backup cycle.")
+	return 0
+}
 
 func runPasswd(args []string) int {
 	fs := flag.NewFlagSet("passwd", flag.ExitOnError)
