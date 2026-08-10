@@ -28,8 +28,8 @@ pass "build"
 
 # ── Init wizard (non-interactive) ────────────────────────────────────────────
 step "Init (non-interactive)"
-"$BINARY" init --password "$PASSWORD" --no-prompt \
-  --store "$STORE" 2>&1 | grep -q "Peer ID" || fail "init did not print Peer ID"
+init_out=$("$BINARY" init --password "$PASSWORD" --no-prompt --store "$STORE" 2>&1)
+echo "$init_out" | grep -q "Peer ID" || fail "init did not print Peer ID"
 pass "init"
 
 # ── Basic backup ─────────────────────────────────────────────────────────────
@@ -67,8 +67,8 @@ COUNT=$("$BINARY" list --store "$STORE" --password "$PASSWORD" --all 2>/dev/null
 pass "versioning: 2 versions recorded"
 
 # versions command
-"$BINARY" versions --file "$TMPDIR_ROOT/file_a.txt" --password "$PASSWORD" 2>&1 | grep -q "VER" || \
-  fail "versions command missing VER column"
+versions_out=$("$BINARY" versions --file "$TMPDIR_ROOT/file_a.txt" --password "$PASSWORD" 2>&1)
+echo "$versions_out" | grep -q "VER" || fail "versions command missing VER column"
 pass "versions command"
 
 # restore --version 1 (original content)
@@ -117,8 +117,8 @@ pass "exclude patterns"
 
 # ── Storage accounting ────────────────────────────────────────────────────────
 step "Storage accounting"
-"$BINARY" storage --store "$STORE" --password "$PASSWORD" 2>&1 | grep -q "Files tracked" || \
-  fail "storage command missing expected output"
+storage_out=$("$BINARY" storage --store "$STORE" --password "$PASSWORD" 2>&1)
+echo "$storage_out" | grep -q "Files tracked" || fail "storage command missing expected output"
 pass "storage accounting"
 
 # ── Prune ────────────────────────────────────────────────────────────────────
@@ -129,8 +129,8 @@ echo "Version 3 content" > "$TMPDIR_ROOT/file_a.txt"
   --store "$STORE" --password "$PASSWORD" --buddies 3
 
 # Dry run first.
-"$BINARY" prune --password "$PASSWORD" --max-versions 1 --dry-run 2>&1 | \
-  grep -qE "Would prune|Nothing" || fail "prune dry-run unexpected output"
+prune_out=$("$BINARY" prune --password "$PASSWORD" --max-versions 1 --dry-run 2>&1)
+echo "$prune_out" | grep -qE "Would prune|Nothing" || fail "prune dry-run unexpected output"
 pass "prune dry-run"
 
 # Real prune: keep 1 version.
@@ -143,8 +143,8 @@ pass "prune (kept latest)"
 # ── Scrub ─────────────────────────────────────────────────────────────────────
 step "Scrub (local shards)"
 # Scrub over locally-stored buddy shards — expect 0 or more checked, no failures.
-"$BINARY" scrub --password "$PASSWORD" 2>&1 | grep -q "Scrub complete" || \
-  fail "scrub did not print 'Scrub complete'"
+scrub_out=$("$BINARY" scrub --password "$PASSWORD" 2>&1)
+echo "$scrub_out" | grep -q "Scrub complete" || fail "scrub did not print 'Scrub complete'"
 pass "scrub"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

@@ -75,9 +75,18 @@ func checkBuddyAuth(reg *buddy.Registry, remotePeer peer.ID) bool {
 }
 
 // handlePull serves a ShardRequest from a known, authenticated buddy.
+//
+// A pull is legitimate in exactly two cases:
+//  1. Self-recovery: a peer lost its local shard store and is fetching its
+//     own shards back from a buddy (req.OwnerID == the requester).
+//  2. Scrub revive: a buddy holding a corrupted replica re-fetches the
+//     canonical copy directly from its true owner (req.OwnerID == this
+//     host's own ID, i.e. we are the owner being asked to resupply our shard).
+//
+// Any other OwnerID would let a buddy read shards belonging to an unrelated
+// third party, so it is rejected.
 func handlePull(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.Store) {
 	defer s.Close()
-	_ = h // reserved for future peerstore lookups
 
 	remotePeer := s.Conn().RemotePeer()
 	remotePeerID := remotePeer.String()
@@ -93,6 +102,15 @@ func handlePull(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.St
 	var req wire.ShardRequest
 	if err := wire.ReadMsg(s, &req); err != nil {
 		log.Printf("[handler] pull read from %s: %v", remotePeerID, err)
+		return
+	}
+
+	if req.OwnerID != remotePeerID && req.OwnerID != h.ID().String() {
+		log.Printf("[handler] pull from %s claiming owner %s — rejected", remotePeerID, req.OwnerID)
+		_ = wire.WriteMsg(s, wire.ShardResponse{
+			Type:  wire.TypeShardResponse,
+			Found: false,
+		})
 		return
 	}
 
@@ -132,6 +150,16 @@ func handleShard(s network.Stream, h host.Host, reg *buddy.Registry, bs *buddy.S
 	var push wire.ShardPush
 	if err := wire.ReadMsg(s, &push); err != nil {
 		log.Printf("[handler] read shard from %s: %v", remotePeerID, err)
+		return
+	}
+
+	if push.OwnerID != remotePeerID {
+		log.Printf("[handler] shard from %s claiming owner %s — rejected", remotePeerID, push.OwnerID)
+		_ = wire.WriteMsg(s, wire.ShardAck{
+			Type:  wire.TypeShardAck,
+			OK:    false,
+			Error: "owner id does not match authenticated peer",
+		})
 		return
 	}
 
@@ -250,8 +278,9 @@ func handleManifest(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
 	defer s.Close()
 
 	remotePeer := s.Conn().RemotePeer()
+	remotePeerID := remotePeer.String()
 	if !checkBuddyAuth(reg, remotePeer) {
-		log.Printf("[manifest] unauthenticated peer %s — rejected", remotePeer)
+		log.Printf("[manifest] unauthenticated peer %s — rejected", remotePeerID)
 		return
 	}
 
@@ -278,6 +307,11 @@ func handleManifest(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
 			_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: false, Error: "decode error"})
 			return
 		}
+		if push.OwnerID != remotePeerID {
+			log.Printf("[manifest] push from %s claiming owner %s — rejected", remotePeerID, push.OwnerID)
+			_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: false, Error: "owner id does not match authenticated peer"})
+			return
+		}
 		if err := bs.PutManifest(push.OwnerID, push.Data); err != nil {
 			log.Printf("[manifest] store manifest for %s: %v", push.OwnerID, err)
 			_ = wire.WriteMsg(s, wire.ManifestAck{Type: wire.TypeManifestAck, OK: false, Error: err.Error()})
@@ -290,6 +324,11 @@ func handleManifest(s network.Stream, reg *buddy.Registry, bs *buddy.Store) {
 		var req wire.ManifestRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			log.Printf("[manifest] unmarshal request from %s: %v", remotePeer, err)
+			return
+		}
+		if req.OwnerID != remotePeerID {
+			log.Printf("[manifest] request from %s claiming owner %s — rejected", remotePeerID, req.OwnerID)
+			_ = wire.WriteMsg(s, wire.ManifestResponse{Type: wire.TypeManifestResponse, OwnerID: req.OwnerID, Found: false})
 			return
 		}
 		data, err := bs.GetManifest(req.OwnerID)

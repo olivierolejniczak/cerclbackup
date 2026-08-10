@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Store persists shards received from remote buddies.
@@ -20,14 +21,34 @@ func NewStore(root string) *Store {
 	return &Store{root: root}
 }
 
-func (s *Store) shardPath(ownerPeerID, fileID string, shardIndex int) string {
+// isSafePathComponent reports whether s is safe to use as a single path
+// segment. ownerPeerID and fileID both originate from network messages sent
+// by buddies, so they must be rejected if they could escape the intended
+// directory (e.g. containing "..", "/", or "\").
+func isSafePathComponent(s string) bool {
+	if s == "" || s == "." || s == ".." {
+		return false
+	}
+	return !strings.ContainsAny(s, `/\`)
+}
+
+func (s *Store) shardPath(ownerPeerID, fileID string, shardIndex int) (string, error) {
+	if !isSafePathComponent(ownerPeerID) {
+		return "", fmt.Errorf("buddystore: unsafe owner id %q", ownerPeerID)
+	}
+	if !isSafePathComponent(fileID) {
+		return "", fmt.Errorf("buddystore: unsafe file id %q", fileID)
+	}
 	return filepath.Join(s.root, "remote", ownerPeerID, fileID,
-		strconv.Itoa(shardIndex)+".shard")
+		strconv.Itoa(shardIndex)+".shard"), nil
 }
 
 // Put stores a shard received from ownerPeerID.
 func (s *Store) Put(ownerPeerID, fileID string, shardIndex int, data []byte) error {
-	p := s.shardPath(ownerPeerID, fileID, shardIndex)
+	p, err := s.shardPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return fmt.Errorf("buddystore: mkdir: %w", err)
 	}
@@ -39,7 +60,10 @@ func (s *Store) Put(ownerPeerID, fileID string, shardIndex int, data []byte) err
 
 // Get retrieves a shard stored on behalf of ownerPeerID.
 func (s *Store) Get(ownerPeerID, fileID string, shardIndex int) ([]byte, error) {
-	p := s.shardPath(ownerPeerID, fileID, shardIndex)
+	p, err := s.shardPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, fmt.Errorf("buddystore: read: %w", err)
@@ -49,24 +73,39 @@ func (s *Store) Get(ownerPeerID, fileID string, shardIndex int) ([]byte, error) 
 
 // Has returns true if the shard exists in the store.
 func (s *Store) Has(ownerPeerID, fileID string, shardIndex int) bool {
-	_, err := os.Stat(s.shardPath(ownerPeerID, fileID, shardIndex))
+	p, err := s.shardPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(p)
 	return err == nil
 }
 
 // Delete removes a shard.
 func (s *Store) Delete(ownerPeerID, fileID string, shardIndex int) error {
-	return os.Remove(s.shardPath(ownerPeerID, fileID, shardIndex))
+	p, err := s.shardPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return err
+	}
+	return os.Remove(p)
 }
 
 // DeleteOwner removes all shards stored on behalf of ownerPeerID.
 func (s *Store) DeleteOwner(ownerPeerID string) error {
+	if !isSafePathComponent(ownerPeerID) {
+		return fmt.Errorf("buddystore: unsafe owner id %q", ownerPeerID)
+	}
 	p := filepath.Join(s.root, "remote", ownerPeerID)
 	return os.RemoveAll(p)
 }
 
 // hashPath returns the sidecar hash file path for a shard.
-func (s *Store) hashPath(ownerPeerID, fileID string, shardIndex int) string {
-	return s.shardPath(ownerPeerID, fileID, shardIndex) + ".hash"
+func (s *Store) hashPath(ownerPeerID, fileID string, shardIndex int) (string, error) {
+	p, err := s.shardPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return "", err
+	}
+	return p + ".hash", nil
 }
 
 // PutWithHash stores the shard data and a sidecar SHA-256 hash file used by
@@ -75,8 +114,12 @@ func (s *Store) PutWithHash(ownerPeerID, fileID string, shardIndex int, data []b
 	if err := s.Put(ownerPeerID, fileID, shardIndex, data); err != nil {
 		return err
 	}
+	hp, err := s.hashPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return err
+	}
 	sum := sha256.Sum256(data)
-	return os.WriteFile(s.hashPath(ownerPeerID, fileID, shardIndex), sum[:], 0600)
+	return os.WriteFile(hp, sum[:], 0600)
 }
 
 // Verify reads the stored shard, recomputes its SHA-256, and compares it to
@@ -87,7 +130,11 @@ func (s *Store) Verify(ownerPeerID, fileID string, shardIndex int) bool {
 	if err != nil {
 		return false
 	}
-	expected, err := os.ReadFile(s.hashPath(ownerPeerID, fileID, shardIndex))
+	hp, err := s.hashPath(ownerPeerID, fileID, shardIndex)
+	if err != nil {
+		return false
+	}
+	expected, err := os.ReadFile(hp)
 	if err != nil {
 		return false
 	}
@@ -118,13 +165,6 @@ func (s *Store) ListAll() ([]ShardRef, error) {
 		}
 		// path = <root>/remote/<ownerPeerID>/<fileID>/<idx>.shard
 		rel, _ := filepath.Rel(root, path)
-		parts := filepath.SplitList(filepath.ToSlash(rel))
-		// SplitList splits on os.PathListSeparator, not path separator — use Split
-		dir, base := filepath.Split(rel)
-		dir = filepath.Clean(dir)
-		ownerAndFile := filepath.SplitList(dir)
-		_ = ownerAndFile
-		// Parse manually: rel = owner/fileID/idx.shard
 		segs := splitPath(rel)
 		if len(segs) != 3 {
 			return nil
@@ -134,8 +174,6 @@ func (s *Store) ListAll() ([]ShardRef, error) {
 		if err != nil {
 			return nil
 		}
-		_ = base
-		_ = parts
 		refs = append(refs, ShardRef{
 			OwnerPeerID: segs[0],
 			FileID:      segs[1],
@@ -149,6 +187,9 @@ func (s *Store) ListAll() ([]ShardRef, error) {
 // PutManifest stores an encrypted manifest blob for ownerID.
 // The path is <root>/remote/<ownerID>/manifest.enc.
 func (s *Store) PutManifest(ownerID string, data []byte) error {
+	if !isSafePathComponent(ownerID) {
+		return fmt.Errorf("store: unsafe owner id %q", ownerID)
+	}
 	dir := filepath.Join(s.root, "remote", ownerID)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("store: mkdir %s: %w", dir, err)
@@ -160,6 +201,9 @@ func (s *Store) PutManifest(ownerID string, data []byte) error {
 // GetManifest retrieves the encrypted manifest blob for ownerID, or returns
 // an error if no manifest has been stored yet.
 func (s *Store) GetManifest(ownerID string) ([]byte, error) {
+	if !isSafePathComponent(ownerID) {
+		return nil, fmt.Errorf("store: unsafe owner id %q", ownerID)
+	}
 	p := filepath.Join(s.root, "remote", ownerID, "manifest.enc")
 	data, err := os.ReadFile(p)
 	if err != nil {
