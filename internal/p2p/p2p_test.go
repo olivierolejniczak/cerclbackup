@@ -137,6 +137,53 @@ func TestShardPushPull(t *testing.T) {
 	}
 }
 
+// TestShardPushOwnerMismatchRejected proves a buddy cannot push a shard
+// claiming to be owned by someone else — only self-owned pushes are stored.
+func TestShardPushOwnerMismatchRejected(t *testing.T) {
+	dir := t.TempDir()
+
+	priv1, _, _ := crypto.GenerateEd25519Key(nil)
+	priv2, _, _ := crypto.GenerateEd25519Key(nil)
+
+	alice, err := p2p.NewHost(priv1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+
+	bob, err := p2p.NewHost(priv2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bob.Close()
+
+	alicePub := testutil.MarshaledPubKey(t, alice)
+	bobReg, _ := buddy.NewRegistry(filepath.Join(dir, "bob_reg.enc"), testMasterKey)
+	if err := bobReg.Add(&buddy.Entry{PeerID: alice.ID().String(), PubKey: alicePub}); err != nil {
+		t.Fatalf("bobReg.Add: %v", err)
+	}
+	bobStore := buddy.NewStore(filepath.Join(dir, "bob_store"))
+
+	p2p.RegisterHandlers(bob, bobReg, bobStore, invite.NewManager(filepath.Join(dir, "bob_invites.json")))
+
+	if err := alice.Connect(context.Background(), peer.AddrInfo{ID: bob.ID(), Addrs: bob.Addrs()}); err != nil {
+		t.Fatalf("connect alice->bob: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Alice pushes a shard claiming ownership by a third party "victim-peer".
+	forgedOwner := "victim-peer"
+	if err := p2p.PushShard(ctx, alice, bob.ID(), forgedOwner, "testfile123", 0, false, []byte("forged shard")); err == nil {
+		t.Fatalf("PushShard with forged owner should have failed")
+	}
+
+	if bobStore.Has(forgedOwner, "testfile123", 0) {
+		t.Fatal("forged shard should not have been stored under the victim's owner id")
+	}
+}
+
 func TestUnknownPeerRejected(t *testing.T) {
 	dir := t.TempDir()
 
@@ -279,7 +326,8 @@ func TestShardFetch(t *testing.T) {
 		t.Fatalf("connect bob->alice: %v", err)
 	}
 
-	// Alice stores a shard (as if a buddy pushed it to her)
+	// Alice stores her own shard (she is both server and owner here) and Bob,
+	// a buddy holding a stale replica, fetches the canonical copy back from her.
 	shardData := []byte("pull-this-shard-from-alice")
 	ownerID := alice.ID().String()
 	fileID := "fetchtest"

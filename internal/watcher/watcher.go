@@ -70,13 +70,29 @@ func (w *Watcher) Stop() {
 	w.fw.Close()
 }
 
+// pending tracks the in-flight debounce timer for a path along with a
+// generation counter used to discard a timer firing that races with a
+// newer event for the same path (see run).
+type pending struct {
+	timer *time.Timer
+	gen   uint64
+}
+
 // run is the event loop: it merges events per path, debounces, then fires h.
 func (w *Watcher) run() {
-	timers := make(map[string]*time.Timer)
+	timers := make(map[string]*pending)
 	var mu sync.Mutex
 
-	fire := func(path string) {
+	// fire only invokes the handler if no newer event has superseded this
+	// generation. Without this check, a timer that has already popped can
+	// race with an incoming event resetting it, causing a duplicate fire.
+	fire := func(path string, gen uint64) {
 		mu.Lock()
+		p, exists := timers[path]
+		if !exists || p.gen != gen {
+			mu.Unlock()
+			return
+		}
 		delete(timers, path)
 		mu.Unlock()
 		w.handler(path)
@@ -86,8 +102,8 @@ func (w *Watcher) run() {
 		select {
 		case <-w.stopCh:
 			mu.Lock()
-			for _, t := range timers {
-				t.Stop()
+			for _, p := range timers {
+				p.timer.Stop()
 			}
 			mu.Unlock()
 			return
@@ -107,12 +123,16 @@ func (w *Watcher) run() {
 			}
 
 			mu.Lock()
-			if t, exists := timers[abs]; exists {
-				t.Reset(w.debounce)
+			p, exists := timers[abs]
+			if exists {
+				p.timer.Stop()
+				p.gen++
 			} else {
-				p := abs
-				timers[abs] = time.AfterFunc(w.debounce, func() { fire(p) })
+				p = &pending{}
+				timers[abs] = p
 			}
+			gen := p.gen
+			p.timer = time.AfterFunc(w.debounce, func() { fire(abs, gen) })
 			mu.Unlock()
 
 		case err, ok := <-w.fw.Errors:
