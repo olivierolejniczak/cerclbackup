@@ -102,3 +102,41 @@ func TestStore_DeleteOwner(t *testing.T) {
 		t.Fatal("owner dir should be gone")
 	}
 }
+
+// TestStore_RejectsPathTraversal ensures that a malicious or buggy peer
+// cannot use ".." or path separators in fileID/ownerPeerID to write or read
+// shards outside of the store root.
+func TestStore_RejectsPathTraversal(t *testing.T) {
+	dir := t.TempDir()
+	s := buddy.NewStore(dir)
+
+	malicious := []struct {
+		owner, fileID string
+	}{
+		{"../../etc", "file1"},
+		{"peer-alice", "../../../etc/cron.d/evil"},
+		{"peer/alice", "file1"},
+		{"peer-alice", "file/1"},
+		{"..", "file1"},
+		{"peer-alice", ".."},
+		{"", "file1"},
+		{"peer-alice", ""},
+	}
+
+	for _, m := range malicious {
+		if err := s.Put(m.owner, m.fileID, 0, []byte("payload")); err == nil {
+			t.Errorf("Put(%q, %q) should have been rejected", m.owner, m.fileID)
+		}
+		if _, err := s.Get(m.owner, m.fileID, 0); err == nil {
+			t.Errorf("Get(%q, %q) should have been rejected", m.owner, m.fileID)
+		}
+		if err := s.PutManifest(m.owner, []byte("blob")); m.owner != "peer-alice" && err == nil {
+			t.Errorf("PutManifest(%q) should have been rejected", m.owner)
+		}
+	}
+
+	// Confirm nothing escaped the store root.
+	if _, err := os.Stat(filepath.Join(dir, "..", "etc")); !os.IsNotExist(err) {
+		t.Fatal("path traversal should not have created files outside the store root")
+	}
+}
