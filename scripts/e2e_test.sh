@@ -18,7 +18,7 @@ pass() { echo "[PASS] $1"; }
 fail() { echo "[FAIL] $1" >&2; exit 1; }
 step() { echo; echo "── $1 ──"; }
 
-cleanup() { rm -rf "$TMPDIR_ROOT"; }
+cleanup() { chmod -R u+w "$TMPDIR_ROOT" 2>/dev/null || true; rm -rf "$TMPDIR_ROOT"; }
 trap cleanup EXIT
 
 # ── Build ────────────────────────────────────────────────────────────────────
