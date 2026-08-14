@@ -20,6 +20,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.14.0
+
       - name: Extract version from tag
         id: version
         shell: bash
@@ -44,7 +51,7 @@ jobs:
           name: release-${{ steps.version.outputs.version }}
           path: |
             dist/cerclbackup.exe
-            dist/cerclbackup-tray.exe
+            dist/cerclbackup-gui.exe
             dist/cerclbackup-setup-*.msi
 
   release:
@@ -66,6 +73,6 @@ jobs:
         with:
           files: |
             dist/cerclbackup.exe
-            dist/cerclbackup-tray.exe
+            dist/cerclbackup-gui.exe
             dist/cerclbackup-setup-*.msi
           generate_release_notes: true

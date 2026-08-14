@@ -1,18 +1,18 @@
-# Phase 16 — Windows-Specific: Systray & Task Scheduler
+# Phase 16 — Windows-Specific: Desktop GUI & Task Scheduler
 
 **Machine A only.** Requires the Windows GUI, PowerShell 5.1, and the MSI-installed binaries.
 
 ---
 
-## Step 16.1 — Systray icon visible
+## Step 16.1 — Tray icon visible
 
 **Machines:** A
 
-After MSI install, `cerclbackup-tray.exe` starts at login via the HKCU Run registry entry.
+After MSI install, `cerclbackup-gui.exe --hidden` starts at login via the HKCU Run registry entry (window stays hidden; only the tray icon shows).
 
 ```powershell
 # Verify the process is running:
-Get-Process cerclbackup-tray -ErrorAction SilentlyContinue | Select-Object Name, Id, StartTime
+Get-Process cerclbackup-gui -ErrorAction SilentlyContinue | Select-Object Name, Id, StartTime
 ```
 
 **Expected:** Process listed. A circle icon visible in the Windows notification area (expand hidden icons if needed).
@@ -22,55 +22,54 @@ Get-Process cerclbackup-tray -ErrorAction SilentlyContinue | Select-Object Name,
 
 ---
 
-## Step 16.2 — Systray: status display
+## Step 16.2 — Tray: show window
 
 **Machines:** A
 
-Right-click the systray icon.
+Right-click the tray icon → **Show window**.
 
-**Expected:**
-- Menu shows `CerclBackup v1.0.0`.
-- If a backup has been run, tooltip or menu shows last backup time.
+**Expected:** The CerclBackup window opens, showing the Dashboard view with live health status (doctor + buddy + storage).
 
-- [ ] PASS — version shown in menu
+- [ ] PASS — window opens with dashboard data
 - [ ] FAIL — notes: ___
 
 ---
 
-## Step 16.3 — Systray: Backup Now
+## Step 16.3 — Tray: Backup now
 
 **Machines:** A
 
-First, set the required environment variables as **user** (not system) variables so the tray process can read them.
+In the window, go to the **Backup** tab and fill in a source path and buddy count, then close the window (it hides to tray instead of exiting).
+
+Right-click the tray icon → **Backup now**.
+
+**Expected:** The window reopens on the Backup tab. Running the backup from there streams progress lines live.
+
+- [ ] PASS — tray action switches to Backup tab
+- [ ] FAIL — notes: ___
+
+---
+
+## Step 16.4 — Window close hides to tray; Quit exits
+
+**Machines:** A
+
+Click the window's close (X) button, then right-click the tray icon → **Quit**.
+
+**Expected:** Closing the window hides it (tray icon remains, process keeps running). Quit terminates the process entirely.
 
 ```powershell
-[System.Environment]::SetEnvironmentVariable(
-    "CERCLBACKUP_SRC",
-    "$env:USERPROFILE\cercltest",
-    "User"
-)
-[System.Environment]::SetEnvironmentVariable(
-    "CERCLBACKUP_PASSWORD",
-    "<new-password-A>",
-    "User"
-)
-
-# Restart the tray to pick up the new env vars:
-Stop-Process -Name cerclbackup-tray -Force -ErrorAction SilentlyContinue
-Start-Process "$env:ProgramFiles\CerclBackup\cerclbackup-tray.exe"
-Start-Sleep 2
+Get-Process cerclbackup-gui -ErrorAction SilentlyContinue
 ```
 
-Right-click the systray icon → **Backup Now**.
+**Expected after Quit:** No output (process gone).
 
-**Expected:** A backup is triggered. After completion the status updates to `Last backup: just now` (or similar).
-
-- [ ] PASS — backup triggered from systray
+- [ ] PASS — close hides to tray, Quit exits the process
 - [ ] FAIL — notes: ___
 
 ---
 
-## Step 16.4 — Task Scheduler: register watch task
+## Step 16.5 — Task Scheduler: register watch task
 
 **Machines:** A
 
@@ -94,7 +93,7 @@ Get-ScheduledTask -TaskName "CerclBackup-Watch" | Select-Object TaskName, State
 
 ---
 
-## Step 16.5 — Task Scheduler: run manually and verify
+## Step 16.6 — Task Scheduler: run manually and verify
 
 **Machines:** A
 
@@ -113,7 +112,7 @@ Get-ScheduledTaskInfo -TaskName "CerclBackup-Watch" |
 
 ---
 
-## Step 16.6 — Task Scheduler: uninstall
+## Step 16.7 — Task Scheduler: uninstall
 
 **Machines:** A
 

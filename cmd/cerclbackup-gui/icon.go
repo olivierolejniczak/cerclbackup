@@ -24,14 +24,14 @@ func iconICO() []byte {
 	// ICONDIRENTRY: 16 bytes
 	// width(1) height(1) colorCount(1) reserved(1) planes(2) bitCount(2) bytesInRes(4) imageOffset(4)
 	entry := make([]byte, 16)
-	entry[0] = 32  // width
-	entry[1] = 32  // height
-	entry[2] = 0   // colorCount (0 = >256)
-	entry[3] = 0   // reserved
-	binary.LittleEndian.PutUint16(entry[4:], 1)                      // planes
-	binary.LittleEndian.PutUint16(entry[6:], 32)                     // bit count
-	binary.LittleEndian.PutUint32(entry[8:], uint32(len(pngData)))   // image size
-	binary.LittleEndian.PutUint32(entry[12:], 6+16)                  // offset = header + one entry
+	entry[0] = 32                                                  // width
+	entry[1] = 32                                                  // height
+	entry[2] = 0                                                   // colorCount (0 = >256)
+	entry[3] = 0                                                   // reserved
+	binary.LittleEndian.PutUint16(entry[4:], 1)                    // planes
+	binary.LittleEndian.PutUint16(entry[6:], 32)                   // bit count
+	binary.LittleEndian.PutUint32(entry[8:], uint32(len(pngData))) // image size
+	binary.LittleEndian.PutUint32(entry[12:], 6+16)                // offset = header + one entry
 	buf.Write(entry)
 
 	buf.Write(pngData)

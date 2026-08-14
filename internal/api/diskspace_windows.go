@@ -1,12 +1,14 @@
 //go:build windows
 
-package main
+package api
 
 import (
 	"syscall"
 	"unsafe"
 )
 
+// diskFreeBytes returns bytes available to the current user on the
+// filesystem containing dir.
 func diskFreeBytes(dir string) (uint64, bool) {
 	ptr, err := syscall.UTF16PtrFromString(dir)
 	if err != nil {
