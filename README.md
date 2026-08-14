@@ -56,17 +56,17 @@ cerclbackup restore --file ~/Documents/report.pdf --out /tmp/report.pdf
 ### Pre-built Windows installer
 
 Download `CerclBackup-X.Y.Z.msi` from [Releases](../../releases) and run it.  
-The installer registers the systray binary to start at login and creates a Start Menu shortcut.
+The installer registers the desktop GUI to start (hidden, in the tray) at login and creates a Start Menu shortcut.
 
 ### Build from source
 
-Requires **Go 1.21+**.
+Requires **Go 1.21+**, **Node 20+**, and the [Wails CLI](https://wails.io/docs/gettingstarted/installation) for the GUI.
 
 ```bash
 git clone https://github.com/cerclbackup/cerclbackup
 cd cerclbackup
 go build ./cmd/cerclbackup/        # CLI daemon
-go build ./cmd/cerclbackup-tray/   # systray (GOOS=windows for cross-compile)
+cd cmd/cerclbackup-gui && wails build   # desktop GUI + tray (add -tags webkit2_41 on Debian/Ubuntu 22.04+)
 ```
 
 ### Windows MSI (build)
@@ -269,7 +269,7 @@ CI (GitHub Actions) runs on every push across Linux and Windows. Release MSIs ar
 cerclbackup/
 ├── cmd/
 │   ├── cerclbackup/          # CLI — all commands
-│   └── cerclbackup-tray/     # Windows systray binary
+│   └── cerclbackup-gui/      # Wails desktop GUI + tray (Windows/Linux)
 ├── internal/
 │   ├── archive/              # .cbk portable archive format
 │   ├── buddy/                # Buddy registry + shard store

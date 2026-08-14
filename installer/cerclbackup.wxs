@@ -66,10 +66,10 @@
               KeyPath="yes"/>
       </Component>
 
-      <!-- Systray companion -->
-      <Component Id="CerclBackupTray">
-        <File Id="CerclBackupTrayExe"
-              Source="$(var.BinDir)\cerclbackup-tray.exe"
+      <!-- Desktop GUI + tray -->
+      <Component Id="CerclBackupGui">
+        <File Id="CerclBackupGuiExe"
+              Source="$(var.BinDir)\cerclbackup-gui.exe"
               KeyPath="yes"/>
       </Component>
 
@@ -81,12 +81,12 @@
   <Fragment>
     <ComponentGroup Id="Shortcuts" Directory="AppMenuFolder">
 
-      <!-- Start Menu entry for the tray app -->
+      <!-- Start Menu entry for the GUI app -->
       <Component Id="StartMenuShortcut">
-        <Shortcut Id="TrayStartMenu"
+        <Shortcut Id="GuiStartMenu"
                   Name="CerclBackup"
-                  Description="P2P encrypted backup — system tray"
-                  Target="[INSTALLFOLDER]cerclbackup-tray.exe"
+                  Description="P2P encrypted backup — desktop app"
+                  Target="[INSTALLFOLDER]cerclbackup-gui.exe"
                   WorkingDirectory="INSTALLFOLDER"/>
         <!-- Required registry key so the component has a KeyPath. -->
         <RegistryValue
@@ -108,16 +108,17 @@
     <ComponentGroup Id="Autostart" Directory="INSTALLFOLDER">
 
       <!--
-        Run cerclbackup-tray.exe at Windows logon for the current user.
-        The user can remove this via Task Manager > Startup tab.
+        Run cerclbackup-gui.exe at Windows logon for the current user.
+        The app starts hidden in the tray; the user can remove this via
+        Task Manager > Startup tab.
       -->
-      <Component Id="AutostartTray">
+      <Component Id="AutostartGui">
         <RegistryValue
           Root="HKCU"
           Key="Software\Microsoft\Windows\CurrentVersion\Run"
-          Name="CerclBackupTray"
+          Name="CerclBackupGui"
           Type="string"
-          Value="[INSTALLFOLDER]cerclbackup-tray.exe"
+          Value="&quot;[INSTALLFOLDER]cerclbackup-gui.exe&quot; --hidden"
           KeyPath="yes"/>
       </Component>
 

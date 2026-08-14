@@ -4,8 +4,9 @@
     Builds CerclBackup Windows binaries and the WiX v4 MSI installer.
 
 .DESCRIPTION
-    1. Cross-compiles cerclbackup.exe and cerclbackup-tray.exe for windows/amd64
-       (runs on Linux/macOS CI as well as Windows with Go installed).
+    1. Builds cerclbackup.exe (windows/amd64 cross-compile) and
+       cerclbackup-gui.exe (via `wails build`, must be run on Windows since
+       Wails needs the native WebView2 toolchain).
     2. Calls `wix build` (WiX Toolset v4, must be on PATH) to produce
        dist\cerclbackup-setup-<version>.msi.
 
@@ -51,13 +52,17 @@ try {
                .\cmd\cerclbackup
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    Write-Host "==> Compiling cerclbackup-tray.exe (windows/amd64, windowsgui) ..."
-    & go build -ldflags "$LdBase -H=windowsgui" `
-               -o "$BinDir\cerclbackup-tray.exe" `
-               .\cmd\cerclbackup-tray
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
     Remove-Item Env:GOOS, Env:GOARCH -ErrorAction SilentlyContinue
+
+    Write-Host "==> Building cerclbackup-gui.exe (wails build) ..."
+    Push-Location cmd\cerclbackup-gui
+    try {
+        & wails build -ldflags $LdBase -o cerclbackup-gui.exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    } finally {
+        Pop-Location
+    }
+    Copy-Item cmd\cerclbackup-gui\build\bin\cerclbackup-gui.exe "$BinDir\cerclbackup-gui.exe" -Force
 
     # ── 3. Build MSI with WiX v4 ─────────────────────────────────────────────
     $MsiOut = "$BinDir\cerclbackup-setup-$Version.msi"
@@ -77,7 +82,7 @@ try {
     Write-Host ""
     Write-Host "Done. Installer: $MsiOut"
     Write-Host "      CLI:       $BinDir\cerclbackup.exe"
-    Write-Host "      Tray:      $BinDir\cerclbackup-tray.exe"
+    Write-Host "      GUI:       $BinDir\cerclbackup-gui.exe"
 
 } finally {
     Pop-Location

@@ -18,7 +18,7 @@ GitHub → https://github.com/olivierolejniczak/cerclbackup/releases/tag/v1.0.0
 
 **Expected:**
 - Installer completes without error.
-- `cerclbackup.exe` and `cerclbackup-tray.exe` are present in `%ProgramFiles%\CerclBackup\`.
+- `cerclbackup.exe` and `cerclbackup-gui.exe` are present in `%ProgramFiles%\CerclBackup\`.
 - Systray icon appears in the Windows notification area.
 
 - [ ] PASS

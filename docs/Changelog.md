@@ -10,6 +10,12 @@ All notable changes are documented here, grouped by development phase.
 - `cerclbackup restore`: Merkle hash verification after reconstruct — mismatch deletes corrupted output and exits non-zero
 - `cerclbackup serve --health-addr`: HTTP health endpoint (`/health` JSON + `/metrics` Prometheus plaintext)
 - `README.md`: full command reference, architecture diagram, security model, project layout
+- `cmd/cerclbackup-gui/`: full Wails desktop GUI (Svelte + TS frontend, French/English i18n) covering every CLI subcommand — setup, circle, backup/watch, restore, buddies, maintenance, settings — plus a system tray icon and hide-on-close behavior; replaces `cmd/cerclbackup-tray`
+- `internal/api/`: extraction layer wrapping the CLI's business logic in JSON-serializable functions shared by both the CLI and the GUI
+- `internal/api/dashboard.go`: aggregated health status (doctor + buddy + storage) for the GUI dashboard
+
+### Removed
+- `cmd/cerclbackup-tray/`: superseded by `cmd/cerclbackup-gui`, which owns both the window and the tray icon in a single process
 
 ---
 
