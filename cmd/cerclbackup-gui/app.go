@@ -136,9 +136,16 @@ func (a *App) Passwd(oldPassword, newPassword string) error {
 	return nil
 }
 
-func (a *App) ConfigShow() (interface{}, string) {
+// ConfigShowResult bundles the config contents with the path it was loaded
+// from, since Wails bindings only support a single (value, error) return.
+type ConfigShowResult struct {
+	Config interface{}
+	Path   string
+}
+
+func (a *App) ConfigShow() (ConfigShowResult, error) {
 	cfg, path := api.ConfigShow()
-	return cfg, path
+	return ConfigShowResult{Config: cfg, Path: path}, nil
 }
 
 func (a *App) ConfigInit() (string, error) { return api.ConfigInit() }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/cerclbackup/cerclbackup/pkg/protocol"
 )
@@ -29,6 +30,7 @@ func ListFiles(params ListParams) ([]*protocol.ManifestEntry, error) {
 
 	entries := mf.All()
 	if params.All {
+		sortByPathAndVersion(entries)
 		return entries, nil
 	}
 
@@ -42,7 +44,19 @@ func ListFiles(params ListParams) ([]*protocol.ManifestEntry, error) {
 	for _, e := range latest {
 		out = append(out, e)
 	}
+	sortByPathAndVersion(out)
 	return out, nil
+}
+
+// sortByPathAndVersion orders entries deterministically for display: by
+// path, then by version within a path (both ascending).
+func sortByPathAndVersion(entries []*protocol.ManifestEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Path != entries[j].Path {
+			return entries[i].Path < entries[j].Path
+		}
+		return entries[i].Version < entries[j].Version
+	})
 }
 
 // Versions returns every backed-up version of file, newest first as stored

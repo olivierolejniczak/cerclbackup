@@ -15,6 +15,7 @@
   "common.close": "Fermer",
   "common.copy": "Copier",
   "common.copied": "Copié !",
+  "common.copied": "Copié !",
   "common.loading": "Chargement...",
   "common.refresh": "Actualiser",
   "common.error": "Erreur",
@@ -67,6 +68,7 @@
   "backup.watch.stop": "Arrêter la surveillance",
   "backup.watch.running": "Surveillance de {dir}",
   "backup.progress": "Progression",
+  "backup.result": "Résultat",
 
   "restore.title": "Restauration",
   "restore.files": "Fichiers sauvegardés",
@@ -110,6 +112,7 @@
   "settings.circles.add": "Ajouter un cercle",
   "settings.circles.scheme": "Schéma RS (ex. 3/2)",
   "settings.config": "Fichier de configuration",
+  "settings.config.init": "Initialiser le fichier de configuration",
   "settings.lock": "Verrouiller la session",
 
   "serve.title": "Démon P2P",

@@ -133,3 +133,98 @@ Get-ScheduledTask -TaskName "CerclBackup-Watch" -ErrorAction SilentlyContinue
 
 - [ ] PASS — task removed, credential deleted
 - [ ] FAIL — notes: ___
+
+---
+
+## Step 16.8 — GUI: language toggle (Settings)
+
+**Machines:** A
+
+Unlock the app, go to **Settings**, switch the **Language** dropdown from English to Français.
+
+**Expected:** Entire UI (nav sidebar, headers, buttons) re-renders in French immediately, no reload needed.
+
+Quit the app fully (`Stop-Process -Name cerclbackup-gui -Force` or tray → Quit) and relaunch `cerclbackup-gui.exe`.
+
+**Expected:** The pre-unlock welcome/setup screen also renders in French ("Bienvenue dans CerclBackup", "Déverrouiller", "Première configuration", "Récupérer à partir d'une phrase") — confirms the language preference is persisted server-side and applied before unlock, not just a client-side toggle.
+
+- [x] PASS — language toggle applies instantly and persists across restart, including the pre-unlock screen
+
+**Bugs found during this step:**
+
+- **FAIL** — Settings view shows a raw `TypeError: (intermediate value) is not iterable` at the top of the page on load. Needs repro/root-cause (likely a failed data fetch feeding the settings view) and a fix before release.
+- **FAIL** — The "Init config file" button (under "Fichier de configuration" / "Configuration file") does not have a French translation — it stays in English ("Init config file") when the rest of the UI is in French. Missing i18n key.
+
+- [ ] PASS — both bugs fixed and re-verified
+- [ ] FAIL — notes: ___
+
+---
+
+## Step 16.9 — GUI: Buddies tab
+
+**Machines:** A
+
+Unlock the app, go to **Buddies**. Confirm the empty state (no buddies yet): Name/Status/Latency table with no rows, "0/0 buddies online" matching the Dashboard.
+
+**Invite a buddy:**
+1. Leave Serve port at default (4001), click **Generate invite**.
+2. Windows Firewall will prompt to allow public/private network access for `cerclbackup-gui` (starting the p2p listener) — click **Allow**.
+
+**Expected:** Displays a 12-word invite phrase and a join multiaddr (`/ip4/<lan-ip>/tcp/4001/p2p/<peer-id>`) with a **Copy** button.
+
+- [x] PASS — invite generated correctly after firewall prompt allowed
+
+**Copy button check:** click **Copy**, then paste (Ctrl+V) into another field to confirm the clipboard actually received the address.
+
+- [x] PASS — clipboard content correct
+- **Minor issue:** no visual confirmation (e.g. "Copied!") is shown after clicking Copy — functions correctly but gives no user feedback.
+
+**Join a buddy — validation and self-join:**
+1. Paste the just-generated address + invite words + a friendly name into the "Join a buddy" fields on the same machine, click **Join**.
+   - **Expected:** clear rejection, not a crash — `Error: ...failed to dial: dial to self attempted`.
+   - [x] PASS
+2. Clear all three "Join a buddy" fields and click **Join** again.
+   - **Expected:** validation error, e.g. `Error: password, addr and words are required`.
+   - [x] PASS
+
+**Refresh button:** click **Refresh** at the top of the page.
+
+- **Expected:** clears any prior error banner, buddy list stays empty (no buddies actually added). No crash.
+- [x] PASS
+
+**Minor issue — default window size:** at the app's default launch size, the two-column Invite/Join layout on this page overflows and requires horizontal scrolling to reach the "Join a buddy" panel and the right edge of "Buddy address"/"Invite words" fields. Confirmed fine once the window is maximized — likely just needs a smaller default width breakpoint or a slightly larger default window size.
+
+- [ ] PASS — full end-to-end buddy pairing tested across two real machines (this step only covered self-join validation on machine A)
+- [ ] FAIL — notes: ___
+
+---
+
+## Step 16.10 — GUI: Maintenance tab
+
+**Machines:** A
+
+Unlock the app, go to **Maintenance**. Confirm all six panels render: Prune old versions, Scrub shard store, Rebalance shards across buddies, Audit shard integrity, Export a backup as a portable file, Import a portable backup file, plus "Recover manifest from a buddy" below.
+
+**Run audit** (empty store, no args needed):
+
+- **FAIL** — `Error: open store: storage: mkdir "": mkdir : The system cannot find the path specified.` The audit binding is being called with an empty store path instead of the resolved store path the Dashboard already uses correctly (`C:\Users\Docker\AppData\Roaming\CerclBackup\store`). Needs fix before release — audit is currently unusable from the GUI.
+
+**Run scrub** / **Run rebalance** (empty store, no args needed):
+
+- [x] PASS — both complete without error; result renders as raw JSON (e.g. `{"Checked":0,"OK":0,"Corrupted":0,"Revived":0,"Failed":0}`) in a **Result** panel
+
+**Run prune** (defaults: keep-all 7d, keep-weekly 30d, max 10, dry-run checked):
+
+- [x] PASS — completes without error
+
+**Export / Import / Recover-manifest validation** (empty required fields):
+
+- [x] PASS — clear, specific validation errors for each: `Error: password and file path are required` (Export, Import), `Error: password and addr are required` (Recover manifest). No crashes.
+
+**Bugs / UX issues found during this step:**
+
+- **FAIL** — `Run audit` fails with an empty-store-path error regardless of input (see above) — functional bug, not just a UX issue.
+- **UX issue** — Result/error placement is inconsistent: validation **errors** render in a banner at the **top** of the page, while **success** results (Scrub/Rebalance JSON) render in a "Result" panel at the very **bottom** of the page, below the fold. Combined with the fact that every button click resets the scroll position, the success Result panel is very easy to miss — there is no toast, no scroll-into-view, and no visual diff (e.g. flash/highlight) to draw attention to a fresh result. Recommend: show all feedback (success and error) in one consistent, visible location (e.g. sticky banner at top, or auto-scroll to the Result panel).
+
+- [ ] PASS — audit bug fixed and re-verified; feedback placement made consistent
+- [ ] FAIL — notes: ___

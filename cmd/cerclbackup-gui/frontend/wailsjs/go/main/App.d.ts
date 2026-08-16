@@ -27,7 +27,7 @@ export function CircleRemove(arg1:string):Promise<void>;
 
 export function ConfigInit():Promise<string>;
 
-export function ConfigShow():Promise<any|string>;
+export function ConfigShow():Promise<main.ConfigShowResult>;
 
 export function Dashboard(arg1:string):Promise<api.DashboardResult>;
 

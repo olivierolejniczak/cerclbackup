@@ -30,8 +30,12 @@ func ConfigDir() (string, error) {
 	return filepath.Join(base, "cerclbackup"), nil
 }
 
-// OpenStore opens (creating if necessary) the shard store at dir.
+// OpenStore opens (creating if necessary) the shard store at dir. An empty
+// dir defaults to storage.DefaultStorePath(), matching the CLI's behavior.
 func OpenStore(dir string) (*storage.Store, error) {
+	if dir == "" {
+		dir = storage.DefaultStorePath()
+	}
 	return storage.New(dir)
 }
 

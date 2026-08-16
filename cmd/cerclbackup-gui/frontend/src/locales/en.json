@@ -15,6 +15,7 @@
   "common.close": "Close",
   "common.copy": "Copy",
   "common.copied": "Copied!",
+  "common.copied": "Copied!",
   "common.loading": "Loading...",
   "common.refresh": "Refresh",
   "common.error": "Error",
@@ -67,6 +68,7 @@
   "backup.watch.stop": "Stop watching",
   "backup.watch.running": "Watching {dir}",
   "backup.progress": "Progress",
+  "backup.result": "Result",
 
   "restore.title": "Restore",
   "restore.files": "Backed-up files",
@@ -110,6 +112,7 @@
   "settings.circles.add": "Add circle",
   "settings.circles.scheme": "RS scheme (e.g. 3/2)",
   "settings.config": "Configuration file",
+  "settings.config.init": "Init config file",
   "settings.lock": "Lock session",
 
   "serve.title": "P2P daemon",
