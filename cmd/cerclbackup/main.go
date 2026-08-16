@@ -369,6 +369,7 @@ func runJoin(args []string) {
 	words := fs.String("words", "", "12-word invite mnemonic from your buddy")
 	password := fs.String("password", cfg.Password, "keystore password (required)")
 	name := fs.String("name", "", "friendly name for this buddy (optional)")
+	port := fs.Int("port", 7742, "port your own cerclbackup serve is (or will be) listening on")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -377,7 +378,7 @@ func runJoin(args []string) {
 		os.Exit(1)
 	}
 
-	peerID, err := api.Join(*password, *addr, *words, *name)
+	peerID, err := api.Join(*password, *addr, *words, *name, *port)
 	if err != nil {
 		log.Fatal(err)
 	}

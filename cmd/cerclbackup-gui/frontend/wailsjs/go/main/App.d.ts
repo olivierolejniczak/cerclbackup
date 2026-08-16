@@ -57,7 +57,7 @@ export function IsUnlocked():Promise<boolean>;
 
 export function IsWatching():Promise<boolean>;
 
-export function Join(arg1:string,arg2:string,arg3:string):Promise<string>;
+export function Join(arg1:string,arg2:string,arg3:string,arg4:number):Promise<string>;
 
 export function JoinEmail(arg1:Array<number>,arg2:string):Promise<string>;
 

@@ -8,6 +8,7 @@ import (
 
 	"github.com/cerclbackup/cerclbackup/internal/invite"
 	p2pmod "github.com/cerclbackup/cerclbackup/internal/p2p"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
@@ -29,6 +30,31 @@ type InviteResult struct {
 	PeerID      string
 }
 
+// selfAddrs starts a throwaway host to enumerate this machine's own
+// interface addresses, then rewrites each one's port to servePort (the port
+// the caller's `serve` daemon actually listens on).
+func selfAddrs(privKey libp2pcrypto.PrivKey, servePort int) (peerID string, addrs []string, _ error) {
+	tmpHost, err := p2pmod.NewHost(privKey, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	defer tmpHost.Close()
+
+	peerID = tmpHost.ID().String()
+	for _, ma := range tmpHost.Addrs() {
+		s := ma.String()
+		if strings.Contains(s, "/udp/") {
+			continue
+		}
+		parts := strings.Split(s, "/tcp/")
+		if len(parts) == 2 {
+			s = parts[0] + fmt.Sprintf("/tcp/%d", servePort)
+		}
+		addrs = append(addrs, s+"/p2p/"+peerID)
+	}
+	return peerID, addrs, nil
+}
+
 // Invite generates a new invite code and collects this host's addresses on
 // servePort (the port the buddy's `serve` will actually listen on).
 func Invite(password string, servePort int) (*InviteResult, error) {
@@ -44,24 +70,10 @@ func Invite(password string, servePort int) (*InviteResult, error) {
 		return nil, err
 	}
 
-	tmpHost, err := p2pmod.NewHost(privKey, 0)
+	peerID, addrs, err := selfAddrs(privKey, servePort)
 	if err != nil {
 		return nil, err
 	}
-	peerID := tmpHost.ID().String()
-	var addrs []string
-	for _, ma := range tmpHost.Addrs() {
-		s := ma.String()
-		if strings.Contains(s, "/udp/") {
-			continue
-		}
-		parts := strings.Split(s, "/tcp/")
-		if len(parts) == 2 {
-			s = parts[0] + fmt.Sprintf("/tcp/%d", servePort)
-		}
-		addrs = append(addrs, s+"/p2p/"+peerID)
-	}
-	tmpHost.Close()
 
 	invMgr := OpenInviteManager()
 	code, err := invMgr.Generate()
@@ -105,8 +117,10 @@ func Invite(password string, servePort int) (*InviteResult, error) {
 }
 
 // Join connects to an inviter at addr using the given invite mnemonic,
-// registering them as a buddy under the given friendly name.
-func Join(password, addr, words, name string) (peerID string, _ error) {
+// registering them as a buddy under the given friendly name. servePort is
+// the port this machine's own `serve` daemon listens on, self-reported to
+// the inviter so it can dial back immediately without waiting on mDNS/DHT.
+func Join(password, addr, words, name string, servePort int) (peerID string, _ error) {
 	if password == "" || addr == "" || words == "" {
 		return "", fmt.Errorf("password, addr and words are required")
 	}
@@ -118,6 +132,12 @@ func Join(password, addr, words, name string) (peerID string, _ error) {
 	if err != nil {
 		return "", err
 	}
+
+	_, myAddrs, err := selfAddrs(privKey, servePort)
+	if err != nil {
+		return "", err
+	}
+
 	h, err := p2pmod.NewHost(privKey, 0)
 	if err != nil {
 		return "", err
@@ -147,7 +167,7 @@ func Join(password, addr, words, name string) (peerID string, _ error) {
 		return "", err
 	}
 
-	if err := p2pmod.SendInviteRequest(context.Background(), h, reg, addrInfo.ID, token, name); err != nil {
+	if err := p2pmod.SendInviteRequest(context.Background(), h, reg, addrInfo.ID, token, name, myAddrs); err != nil {
 		return "", fmt.Errorf("invite: %w", err)
 	}
 

@@ -61,9 +61,11 @@ func (r *Registry) load() error {
 	if err := json.Unmarshal(plain, &d); err != nil {
 		return fmt.Errorf("registry: unmarshal: %w", err)
 	}
+	fresh := make(map[string]*Entry, len(d.Entries))
 	for _, e := range d.Entries {
-		r.byPeerID[e.PeerID] = e
+		fresh[e.PeerID] = e
 	}
+	r.byPeerID = fresh
 	return nil
 }
 
@@ -86,10 +88,15 @@ func (r *Registry) save() error {
 	return os.WriteFile(r.path, ciphertext, 0600)
 }
 
-// Add adds or replaces a buddy entry.
+// Add adds or replaces a buddy entry. It reloads from disk first so that a
+// long-running `serve` daemon and one-shot CLI commands sharing the same
+// registry file don't clobber each other's concurrent writes.
 func (r *Registry) Add(e *Entry) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return err
+	}
 	if e.AddedAt.IsZero() {
 		e.AddedAt = time.Now().UTC()
 	}
@@ -97,20 +104,28 @@ func (r *Registry) Add(e *Entry) error {
 	return r.save()
 }
 
-// UpdateAddrs persists the latest multiaddrs seen for a buddy.
+// UpdateAddrs persists the latest multiaddrs seen for a buddy. It reloads
+// from disk first for the same reason as Add.
 func (r *Registry) UpdateAddrs(peerID string, addrs []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return
+	}
 	if e, ok := r.byPeerID[peerID]; ok {
 		e.Addrs = addrs
 		_ = r.save()
 	}
 }
 
-// Remove deletes a buddy from the registry.
+// Remove deletes a buddy from the registry. It reloads from disk first for
+// the same reason as Add.
 func (r *Registry) Remove(peerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return err
+	}
 	delete(r.byPeerID, peerID)
 	return r.save()
 }

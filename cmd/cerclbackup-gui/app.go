@@ -186,12 +186,12 @@ func (a *App) Invite(servePort int) (*api.InviteResult, error) {
 	return api.Invite(pw, servePort)
 }
 
-func (a *App) Join(addr, words, name string) (string, error) {
+func (a *App) Join(addr, words, name string, servePort int) (string, error) {
 	pw, err := a.getPassword()
 	if err != nil {
 		return "", err
 	}
-	return api.Join(pw, addr, words, name)
+	return api.Join(pw, addr, words, name, servePort)
 }
 
 func (a *App) InviteEmail(circleName string, smtp *api.SMTPConfig, to string) (*api.InviteEmailResult, error) {
