@@ -12,10 +12,13 @@
   let running = false;
   let progress: string[] = [];
   let error = '';
+  let result: unknown = null;
 
   let watchDir = '';
   let watching = false;
   let debounceSeconds = 3;
+
+  let feedbackEl: HTMLElement;
 
   function addPath() {
     paths = [...paths, ''];
@@ -44,14 +47,16 @@
 
   async function run() {
     error = '';
+    result = null;
     running = true;
     progress = [];
     try {
-      await Backup('', buddies, exclude, uploadKbps, autoPrune, paths.filter((p) => p.trim()));
+      result = await Backup('', buddies, exclude, uploadKbps, autoPrune, paths.filter((p) => p.trim()));
     } catch (e: any) {
       error = String(e);
     } finally {
       running = false;
+      feedbackEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
 
@@ -73,7 +78,19 @@
 
 <div class="backup">
   <h1>{$t('backup.title')}</h1>
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error || result || progress.length > 0}
+    <div class="feedback" bind:this={feedbackEl}>
+      {#if error}<p class="error">{error}</p>{/if}
+      {#if progress.length > 0}
+        <h3>{$t('backup.progress')}</h3>
+        <pre>{progress.join('\n')}</pre>
+      {/if}
+      {#if result}
+        <h3>{$t('backup.result')}</h3>
+        <pre>{JSON.stringify(result, null, 2)}</pre>
+      {/if}
+    </div>
+  {/if}
 
   <div class="card">
     <div class="label-only">{$t('backup.srcPaths')}</div>
@@ -101,12 +118,6 @@
     {#if watching}<p>{$t('backup.watch.running', { dir: watchDir })}</p>{/if}
   </div>
 
-  {#if progress.length > 0}
-    <div class="card">
-      <h3>{$t('backup.progress')}</h3>
-      <pre>{progress.join('\n')}</pre>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -120,4 +131,6 @@
   button:hover { background: rgba(255,255,255,0.25); }
   pre { max-height: 260px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; }
   .error { color: #f87171; }
+  .feedback { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; text-align: left; }
+  .feedback pre { margin: 0; }
 </style>

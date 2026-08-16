@@ -80,7 +80,7 @@ func Doctor(params DoctorParams) (*DoctorResult, error) {
 	}
 
 	// 3. Store writable
-	st, err := storage.New(storeDir)
+	st, err := OpenStore(storeDir)
 	if err != nil {
 		add("shard store", false, fmt.Sprintf("cannot open %s: %v", storeDir, err))
 	} else {

@@ -19,6 +19,8 @@
   let pullAddr = '';
   let pullOut = '';
 
+  let feedbackEl: HTMLElement;
+
   function show(v: unknown) {
     output = JSON.stringify(v, null, 2);
   }
@@ -31,12 +33,18 @@
     } catch (e: any) {
       error = String(e);
     }
+    feedbackEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 </script>
 
 <div class="maintenance">
   <h1>{$t('maintenance.title')}</h1>
-  {#if error}<p class="error">{error}</p>{/if}
+  {#if error || output}
+    <div class="feedback" bind:this={feedbackEl}>
+      {#if error}<p class="error">{error}</p>{/if}
+      {#if output}<pre>{output}</pre>{/if}
+    </div>
+  {/if}
 
   <div class="grid">
     <div class="card">
@@ -84,13 +92,6 @@
       <button on:click={() => run(() => ManifestPull(pullAddr, pullOut))}>{$t('maintenance.manifestPull')}</button>
     </div>
   </div>
-
-  {#if output}
-    <div class="card">
-      <h3>Result</h3>
-      <pre>{output}</pre>
-    </div>
-  {/if}
 </div>
 
 <style>
@@ -103,4 +104,6 @@
   button:hover { background: rgba(255,255,255,0.25); }
   pre { max-height: 300px; overflow-y: auto; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 4px; font-size: 0.8rem; }
   .error { color: #f87171; }
+  .feedback { background: rgba(255,255,255,0.06); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; }
+  .feedback pre { margin: 0; }
 </style>

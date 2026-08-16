@@ -81,6 +81,10 @@ func Audit(password, storeDir string) (*AuditResult, error) {
 	if password == "" {
 		return nil, fmt.Errorf("password is required")
 	}
+	if storeDir == "" {
+		storeDir = storage.DefaultStorePath()
+	}
+
 	ks, err := OpenOrCreateKeystore(password)
 	if err != nil {
 		return nil, err
@@ -219,6 +223,9 @@ type StorageStats struct {
 func Storage(password, storeDir string) (*StorageStats, error) {
 	if password == "" {
 		return nil, fmt.Errorf("password is required")
+	}
+	if storeDir == "" {
+		storeDir = storage.DefaultStorePath()
 	}
 	ks, err := OpenOrCreateKeystore(password)
 	if err != nil {

@@ -37,9 +37,9 @@
 
   async function loadConfig() {
     try {
-      const [cfg, path] = await ConfigShow();
-      configPath = path;
-      configText = JSON.stringify(cfg, null, 2);
+      const result = await ConfigShow();
+      configPath = result.Path;
+      configText = JSON.stringify(result.Config, null, 2);
     } catch (e: any) {
       error = String(e);
     }
@@ -164,7 +164,7 @@
       <h3>{$t('settings.config')}</h3>
       <p class="dim">{configPath}</p>
       <pre>{configText}</pre>
-      <button on:click={initConfig}>Init config file</button>
+      <button on:click={initConfig}>{$t('settings.config.init')}</button>
     </div>
   </div>
 

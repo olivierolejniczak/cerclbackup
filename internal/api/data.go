@@ -49,7 +49,7 @@ func Export(password, filePath string, version int, outPath, storeDir string) (*
 		return nil, fmt.Errorf("%q not found in manifest", filePath)
 	}
 
-	st, err := storage.New(storeDir)
+	st, err := OpenStore(storeDir)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
@@ -105,7 +105,7 @@ func Import(password, cbkPath, storeDir string) (*ImportResult, error) {
 		return nil, fmt.Errorf("read archive: %w", err)
 	}
 
-	st, err := storage.New(storeDir)
+	st, err := OpenStore(storeDir)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}

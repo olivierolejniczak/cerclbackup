@@ -142,7 +142,7 @@ func Backup(params BackupParams) (*BackupResult, error) {
 	if params.AutoPrune {
 		pruned := mf.PruneVersions(manifest.DefaultRetentionPolicy())
 		if len(pruned) > 0 {
-			if st2, err := storage.New(params.StoreDir); err == nil {
+			if st2, err := OpenStore(params.StoreDir); err == nil {
 				for _, id := range pruned {
 					st2.Delete(id)
 				}

@@ -581,6 +581,20 @@ export namespace emailinvite {
 
 export namespace main {
 	
+	export class ConfigShowResult {
+	    Config: any;
+	    Path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ConfigShowResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Config = source["Config"];
+	        this.Path = source["Path"];
+	    }
+	}
 	export class ServeStatus {
 	    Running: boolean;
 	    PeerID: string;
