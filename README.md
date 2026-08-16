@@ -261,6 +261,10 @@ bash scripts/e2e_test.sh
 
 CI (GitHub Actions) runs on every push across Linux and Windows. Release MSIs are built automatically on `v*` tags.
 
+See [docs/runbook-3-buddy-exchange](docs/runbook-3-buddy-exchange/README.md) for a
+walkthrough (CLI + GUI, with screenshots) of a full multi-buddy pairing,
+backup, and restore exchange.
+
 ---
 
 ## Project layout
