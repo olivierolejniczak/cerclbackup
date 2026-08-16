@@ -251,7 +251,7 @@ func TestInviteRoundtrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := p2p.SendInviteRequest(ctx, bob, bobReg, alice.ID(), token, "Bob"); err != nil {
+	if err := p2p.SendInviteRequest(ctx, bob, bobReg, alice.ID(), token, "Bob", nil); err != nil {
 		t.Fatalf("SendInviteRequest: %v", err)
 	}
 

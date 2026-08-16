@@ -139,7 +139,7 @@ func JoinEmail(password string, payloadJSON []byte, words string) (circleName, p
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := p2pmod.SendInviteRequest(ctx, h, reg, inviterPeerID, secret, h.ID().String()); err != nil {
+	if err := p2pmod.SendInviteRequest(ctx, h, reg, inviterPeerID, secret, h.ID().String(), nil); err != nil {
 		return "", "", fmt.Errorf("P2P handshake: %w", err)
 	}
 

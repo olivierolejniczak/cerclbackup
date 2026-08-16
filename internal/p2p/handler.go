@@ -213,11 +213,14 @@ func handleInvite(s network.Stream, h host.Host, reg *buddy.Registry, invMgr *in
 		return
 	}
 
-	// Add joiner to registry
+	// Add joiner to registry, including the addresses it self-reported so
+	// this side can dial it back immediately without waiting on mDNS/DHT
+	// discovery (which often never succeeds across NATs on the internet).
 	if err := reg.Add(&buddy.Entry{
 		PeerID:       req.PeerID,
 		PubKey:       req.PubKey,
 		FriendlyName: req.FriendlyName,
+		Addrs:        req.Addrs,
 	}); err != nil {
 		log.Printf("[handler] add buddy: %v", err)
 	}
@@ -232,9 +235,12 @@ func handleInvite(s network.Stream, h host.Host, reg *buddy.Registry, invMgr *in
 }
 
 // SendInviteRequest connects to targetAddr and presents the invite token.
-// On success, adds the inviter to the buddy registry and returns.
+// myAddrs are this host's own reachable multiaddrs (e.g. built from its
+// `serve` port) so the inviter can dial back immediately. On success, adds
+// the inviter to the buddy registry, recording the addresses actually used
+// to reach it (as seen in the libp2p peerstore after Connect).
 func SendInviteRequest(ctx context.Context, h host.Host, reg *buddy.Registry,
-	targetPeerID peer.ID, token []byte, friendlyName string) error {
+	targetPeerID peer.ID, token []byte, friendlyName string, myAddrs []string) error {
 
 	s, err := h.NewStream(ctx, targetPeerID, wire.ProtoInvite)
 	if err != nil {
@@ -253,6 +259,7 @@ func SendInviteRequest(ctx context.Context, h host.Host, reg *buddy.Registry,
 		PeerID:       h.ID().String(),
 		PubKey:       ownPubBytes,
 		FriendlyName: friendlyName,
+		Addrs:        myAddrs,
 	}
 	if err := wire.WriteMsg(s, req); err != nil {
 		return err
@@ -266,9 +273,16 @@ func SendInviteRequest(ctx context.Context, h host.Host, reg *buddy.Registry,
 		return fmt.Errorf("invite rejected: %s", resp.Error)
 	}
 
+	targetAddrs := make([]string, 0, len(h.Peerstore().Addrs(targetPeerID)))
+	for _, ma := range h.Peerstore().Addrs(targetPeerID) {
+		targetAddrs = append(targetAddrs, ma.String()+"/p2p/"+targetPeerID.String())
+	}
+
 	return reg.Add(&buddy.Entry{
-		PeerID: resp.PeerID,
-		PubKey: resp.PubKey,
+		PeerID:       resp.PeerID,
+		PubKey:       resp.PubKey,
+		FriendlyName: friendlyName,
+		Addrs:        targetAddrs,
 	})
 }
 

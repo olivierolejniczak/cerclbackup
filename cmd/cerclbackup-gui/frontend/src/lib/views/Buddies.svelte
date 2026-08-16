@@ -51,7 +51,7 @@
     error = '';
     joinResult = '';
     try {
-      const peerId = await Join(joinAddr, joinWords, joinName);
+      const peerId = await Join(joinAddr, joinWords, joinName, servePort);
       joinResult = `Joined ${peerId}`;
       await load();
     } catch (e: any) {
@@ -111,6 +111,7 @@
       <label>{$t('buddies.join.addr')}<input type="text" bind:value={joinAddr} /></label>
       <label>{$t('buddies.join.words')}<input type="text" bind:value={joinWords} /></label>
       <label>{$t('buddies.join.name')}<input type="text" bind:value={joinName} /></label>
+      <label>Serve port<input type="number" bind:value={servePort} /></label>
       <button on:click={doJoin}>{$t('buddies.join.button')}</button>
       {#if joinResult}<p class="ok">{joinResult}</p>{/if}
     </div>

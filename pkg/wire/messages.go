@@ -64,11 +64,12 @@ type ShardResponse struct {
 
 // InviteRequest is sent by the joiner to the inviter.
 type InviteRequest struct {
-	Type         string `json:"type"`
-	Token        []byte `json:"token"`
-	PeerID       string `json:"peer_id"`
-	PubKey       []byte `json:"pub_key"`
-	FriendlyName string `json:"friendly_name,omitempty"`
+	Type         string   `json:"type"`
+	Token        []byte   `json:"token"`
+	PeerID       string   `json:"peer_id"`
+	PubKey       []byte   `json:"pub_key"`
+	FriendlyName string   `json:"friendly_name,omitempty"`
+	Addrs        []string `json:"addrs,omitempty"` // joiner's own reachable multiaddrs, so the inviter can dial back immediately
 }
 
 // InviteResponse is the inviter's reply to an InviteRequest.
