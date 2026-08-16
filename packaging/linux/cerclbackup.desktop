@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CerclBackup
+Comment=Encrypted, peer-to-peer backup with no cloud in between
+Exec=cerclbackup-gui
+Icon=cerclbackup
+Terminal=false
+Categories=Utility;Archiving;
+StartupWMClass=cerclbackup-gui
