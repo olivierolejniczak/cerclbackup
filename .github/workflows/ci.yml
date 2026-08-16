@@ -23,8 +23,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Download modules
         run: go mod download
+
+      - name: Build GUI frontend assets
+        run: |
+          cd cmd/cerclbackup-gui/frontend
+          npm ci
+          npm run build
 
       - name: Vet
         run: go vet ./...
