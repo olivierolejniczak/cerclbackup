@@ -72,14 +72,13 @@ func StartServe(params ServeParams) (*ServeHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := p2pmod.NewHost(privKey, port)
+	reg, err := OpenRegistry(ks)
 	if err != nil {
 		return nil, err
 	}
 
-	reg, err := OpenRegistry(ks)
+	h, err := p2pmod.NewServeHost(privKey, port, reg)
 	if err != nil {
-		h.Close()
 		return nil, err
 	}
 
