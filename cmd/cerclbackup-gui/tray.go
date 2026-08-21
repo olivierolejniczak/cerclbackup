@@ -14,7 +14,7 @@ func (a *App) startTray() {
 }
 
 func (a *App) onTrayReady() {
-	systray.SetIcon(iconICO())
+	systray.SetIcon(trayIconBytes())
 	systray.SetTitle("CerclBackup")
 	systray.SetTooltip("CerclBackup — P2P encrypted backup")
 
