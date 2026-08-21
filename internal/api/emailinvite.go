@@ -11,27 +11,28 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
-// SMTPConfig mirrors emailinvite.SMTPConfig for callers that don't want to
-// import that package directly.
-type SMTPConfig = emailinvite.SMTPConfig
-
 // InviteEmailParams configures InviteEmail.
 type InviteEmailParams struct {
 	Password string
-	Circle   string      // circle name shown in the email, default "CerclBackup"
-	SMTP     *SMTPConfig // nil = don't send, just return the payload for display
+	Circle   string // circle name shown in the email, default "CerclBackup"
 }
 
-// InviteEmailResult is the generated out-of-band email invite.
+// InviteEmailResult is the generated out-of-band email invite. CerclBackup
+// never sends this itself — the caller pastes Subject/Body into their own
+// mail client and shares Words with the recipient through a different
+// channel, so the recipient can confirm the invite's sender identity before
+// trusting it.
 type InviteEmailResult struct {
 	PeerID      string
 	Words       string // 12-word OOB code — must be shared via a different channel than the email
-	PayloadJSON []byte // JSON to paste into an email body, when SMTP is nil
-	Sent        bool
+	PayloadJSON []byte // raw JSON payload, also embedded in Body
+	Subject     string // ready-to-send email subject
+	Body        string // ready-to-send email body
 }
 
 // InviteEmail generates a dual-channel (signed payload + OOB word) email
-// invite and, if params.SMTP is set, sends it to `to`.
+// invite and returns ready-to-send email content; it never sends mail
+// itself.
 func InviteEmail(params InviteEmailParams, to string) (*InviteEmailResult, error) {
 	if to == "" || params.Password == "" {
 		return nil, fmt.Errorf("to and password are required")
@@ -73,19 +74,18 @@ func InviteEmail(params InviteEmailParams, to string) (*InviteEmailResult, error
 		return nil, fmt.Errorf("register commitment: %w", err)
 	}
 
-	result := &InviteEmailResult{PeerID: h.ID().String(), Words: words}
+	data, err := emailinvite.ToJSON(payload)
+	if err != nil {
+		return nil, err
+	}
+	subject, body := emailinvite.ComposeEmail(payload)
 
-	if params.SMTP != nil {
-		if err := emailinvite.Send(*params.SMTP, to, payload); err != nil {
-			return nil, fmt.Errorf("send: %w", err)
-		}
-		result.Sent = true
-	} else {
-		data, err := emailinvite.ToJSON(payload)
-		if err != nil {
-			return nil, err
-		}
-		result.PayloadJSON = data
+	result := &InviteEmailResult{
+		PeerID:      h.ID().String(),
+		Words:       words,
+		PayloadJSON: data,
+		Subject:     subject,
+		Body:        body,
 	}
 
 	return result, nil

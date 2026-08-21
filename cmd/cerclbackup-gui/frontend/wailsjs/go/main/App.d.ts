@@ -4,7 +4,6 @@ import {api} from '../models';
 import {buddy} from '../models';
 import {circle} from '../models';
 import {main} from '../models';
-import {emailinvite} from '../models';
 import {protocol} from '../models';
 import {rebalance} from '../models';
 import {scrub} from '../models';
@@ -49,7 +48,7 @@ export function Init(arg1:api.InitParams):Promise<api.InitResult>;
 
 export function Invite(arg1:number):Promise<api.InviteResult>;
 
-export function InviteEmail(arg1:string,arg2:emailinvite.SMTPConfig,arg3:string):Promise<api.InviteEmailResult>;
+export function InviteEmail(arg1:string,arg2:string):Promise<api.InviteEmailResult>;
 
 export function IsInitialized():Promise<boolean>;
 
@@ -59,7 +58,7 @@ export function IsWatching():Promise<boolean>;
 
 export function Join(arg1:string,arg2:string,arg3:string,arg4:number):Promise<string>;
 
-export function JoinEmail(arg1:Array<number>,arg2:string):Promise<string>;
+export function JoinEmail(arg1:Array<number>,arg2:string):Promise<main.JoinEmailResult>;
 
 export function ListFiles(arg1:boolean):Promise<Array<protocol.ManifestEntry>>;
 

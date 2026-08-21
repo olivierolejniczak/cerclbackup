@@ -92,6 +92,21 @@
   "buddies.join.name": "Nom convivial",
   "buddies.join.button": "Rejoindre",
 
+  "buddies.emailInvite.title": "Inviter par e-mail",
+  "buddies.emailInvite.circle": "Nom du cercle",
+  "buddies.emailInvite.to": "E-mail du destinataire (pour référence)",
+  "buddies.emailInvite.generate": "Préparer l'invitation par e-mail",
+  "buddies.emailInvite.subject": "Objet",
+  "buddies.emailInvite.body": "Corps du message — à coller dans votre propre messagerie",
+  "buddies.emailInvite.openMailto": "Ouvrir dans l'application de messagerie",
+  "buddies.emailInvite.warning": "CerclBackup n'envoie jamais cet e-mail à votre place. Copiez l'objet et le corps ci-dessus dans votre propre messagerie et envoyez-le vous-même. Partagez ensuite le code de 12 mots ci-dessous avec le destinataire par un canal DIFFÉRENT de l'e-mail — appel téléphonique, SMS, ou en personne — et faites-lui confirmer de vive voix que c'est bien vous avant qu'il ne l'utilise. Cette confirmation prouve votre identité et empêche un imposteur ayant accès à la boîte mail de se faire passer pour vous.",
+
+  "buddies.emailJoin.title": "Rejoindre depuis une invitation par e-mail",
+  "buddies.emailJoin.payload": "Collez l'e-mail complet (ou juste le bloc d'invitation) ici",
+  "buddies.emailJoin.words": "Code de 12 mots (reçu par un autre canal)",
+  "buddies.emailJoin.warning": "N'utilisez ce code que si vous avez confirmé de vive voix ou en personne qu'il provient bien de l'expéditeur de l'e-mail — ne faites jamais confiance à un code reçu par le même canal que l'e-mail.",
+  "buddies.emailJoin.button": "Vérifier et rejoindre",
+
   "maintenance.title": "Maintenance",
   "maintenance.prune": "Purger les anciennes versions",
   "maintenance.prune.dryRun": "Simulation (sans suppression)",

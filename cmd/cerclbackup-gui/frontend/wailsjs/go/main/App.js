@@ -82,8 +82,8 @@ export function Invite(arg1) {
   return window['go']['main']['App']['Invite'](arg1);
 }
 
-export function InviteEmail(arg1, arg2, arg3) {
-  return window['go']['main']['App']['InviteEmail'](arg1, arg2, arg3);
+export function InviteEmail(arg1, arg2) {
+  return window['go']['main']['App']['InviteEmail'](arg1, arg2);
 }
 
 export function IsInitialized() {
