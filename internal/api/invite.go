@@ -109,7 +109,7 @@ func Invite(password string, servePort int) (*InviteResult, error) {
 	}
 
 	joinAddr := ""
-	if preferred := preferredOutboundIP(); preferred != "" {
+	if preferred := preferredOutboundIP(); preferred != "" && preferred != "127.0.0.1" && preferred != "::1" && !strings.HasPrefix(preferred, "169.254.") {
 		for _, a := range addrs {
 			if strings.Contains(a, "/"+preferred+"/") {
 				joinAddr = a
