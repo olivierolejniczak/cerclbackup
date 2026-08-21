@@ -92,6 +92,21 @@
   "buddies.join.name": "Friendly name",
   "buddies.join.button": "Join",
 
+  "buddies.emailInvite.title": "Invite by email",
+  "buddies.emailInvite.circle": "Circle name",
+  "buddies.emailInvite.to": "Recipient email (for your reference)",
+  "buddies.emailInvite.generate": "Prepare email invite",
+  "buddies.emailInvite.subject": "Subject",
+  "buddies.emailInvite.body": "Body — paste into your own mail client",
+  "buddies.emailInvite.openMailto": "Open in mail app",
+  "buddies.emailInvite.warning": "CerclBackup never sends this email for you. Copy the subject and body above into your own mail client and send it yourself. Then share the 12-word code below with the recipient through a DIFFERENT channel than email — phone call, SMS, or in person — and have them confirm by voice that it's really you before they use it. That confirmation is what proves your identity to them and stops an impostor with access to the inbox from impersonating you.",
+
+  "buddies.emailJoin.title": "Join from an email invite",
+  "buddies.emailJoin.payload": "Paste the whole email (or just the invite block) here",
+  "buddies.emailJoin.words": "12-word code (received via a different channel)",
+  "buddies.emailJoin.warning": "Only use this code if you've confirmed by voice or in person that it actually came from the sender of the email — never trust a code that arrived by the same channel as the email itself.",
+  "buddies.emailJoin.button": "Verify and join",
+
   "maintenance.title": "Maintenance",
   "maintenance.prune": "Prune old versions",
   "maintenance.prune.dryRun": "Dry run",

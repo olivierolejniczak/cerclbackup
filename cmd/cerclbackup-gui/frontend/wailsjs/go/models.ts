@@ -357,7 +357,8 @@ export namespace api {
 	    PeerID: string;
 	    Words: string;
 	    PayloadJSON: number[];
-	    Sent: boolean;
+	    Subject: string;
+	    Body: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new InviteEmailResult(source);
@@ -368,7 +369,8 @@ export namespace api {
 	        this.PeerID = source["PeerID"];
 	        this.Words = source["Words"];
 	        this.PayloadJSON = source["PayloadJSON"];
-	        this.Sent = source["Sent"];
+	        this.Subject = source["Subject"];
+	        this.Body = source["Body"];
 	    }
 	}
 	export class InviteResult {
@@ -554,31 +556,6 @@ export namespace circle {
 
 }
 
-export namespace emailinvite {
-	
-	export class SMTPConfig {
-	    Host: string;
-	    Port: number;
-	    Username: string;
-	    Password: string;
-	    From: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new SMTPConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.Host = source["Host"];
-	        this.Port = source["Port"];
-	        this.Username = source["Username"];
-	        this.Password = source["Password"];
-	        this.From = source["From"];
-	    }
-	}
-
-}
-
 export namespace main {
 	
 	export class ConfigShowResult {
@@ -593,6 +570,20 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Config = source["Config"];
 	        this.Path = source["Path"];
+	    }
+	}
+	export class JoinEmailResult {
+	    Circle: string;
+	    PeerID: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new JoinEmailResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Circle = source["Circle"];
+	        this.PeerID = source["PeerID"];
 	    }
 	}
 	export class ServeStatus {

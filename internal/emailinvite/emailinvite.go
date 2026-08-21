@@ -149,6 +149,35 @@ func ToJSON(p Payload) ([]byte, error) {
 	return json.MarshalIndent(p, "", "  ")
 }
 
+// ComposeEmail formats the invite payload as a ready-to-send email subject
+// and body. It never sends anything — the caller pastes this into their own
+// mail client — and it deliberately excludes the OOB words: those must reach
+// the recipient through a different channel (phone call, SMS, in person),
+// which is what lets the recipient confirm the invite really came from the
+// person they expect, rather than an impostor with access to their inbox.
+func ComposeEmail(p Payload) (subject, body string) {
+	data, err := ToJSON(p)
+	if err != nil {
+		data = []byte("<error formatting invite payload: " + err.Error() + ">")
+	}
+
+	subject = fmt.Sprintf("CerclBackup invite — circle %q", p.Circle)
+
+	var sb strings.Builder
+	sb.WriteString("You have been invited to join a CerclBackup circle.\n\n")
+	sb.WriteString("To accept, you also need a 12-word code. That code will reach you\n")
+	sb.WriteString("through a DIFFERENT channel than this email (phone call, SMS, in\n")
+	sb.WriteString("person) — never by email. Before using that code, confirm by voice\n")
+	sb.WriteString("or in person that it really came from the sender of this email: that\n")
+	sb.WriteString("confirmation is what proves their identity and stops someone else\n")
+	sb.WriteString("from impersonating them.\n\n")
+	sb.WriteString("--- BEGIN CERCLBACKUP INVITE ---\n")
+	sb.Write(data)
+	sb.WriteString("\n--- END CERCLBACKUP INVITE ---\n")
+	body = sb.String()
+	return subject, body
+}
+
 // FromJSON parses a Payload from JSON.
 func FromJSON(data []byte) (Payload, error) {
 	var p Payload

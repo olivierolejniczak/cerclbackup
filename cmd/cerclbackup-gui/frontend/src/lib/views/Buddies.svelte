@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '../stores/i18n';
-  import { BuddyStatus, BuddyRemove, Invite, Join } from '../../../wailsjs/go/main/App';
+  import { BuddyStatus, BuddyRemove, Invite, Join, InviteEmail, JoinEmail } from '../../../wailsjs/go/main/App';
   import type { api } from '../../../wailsjs/go/models';
 
   let statuses: api.BuddyStatusEntry[] = [];
@@ -15,6 +15,16 @@
   let joinWords = '';
   let joinName = '';
   let joinResult = '';
+
+  let emailCircle = 'CerclBackup';
+  let emailTo = '';
+  let emailInvite: api.InviteEmailResult | null = null;
+  let emailInviteError = '';
+
+  let emailPayload = '';
+  let emailJoinWords = '';
+  let emailJoinResult = '';
+  let emailJoinError = '';
 
   async function load() {
     loading = true;
@@ -68,6 +78,45 @@
     clearTimeout(copiedTimer);
     copiedTimer = setTimeout(() => (copied = false), 1500);
   }
+
+  async function generateEmailInvite() {
+    emailInviteError = '';
+    emailInvite = null;
+    try {
+      emailInvite = await InviteEmail(emailCircle, emailTo);
+    } catch (e: any) {
+      emailInviteError = String(e);
+    }
+  }
+
+  function mailtoLink(): string {
+    if (!emailInvite) return '';
+    const params = new URLSearchParams({ subject: emailInvite.Subject, body: emailInvite.Body });
+    return `mailto:${encodeURIComponent(emailTo)}?${params.toString()}`;
+  }
+
+  function extractPayloadJSON(pasted: string): string {
+    const start = pasted.indexOf('--- BEGIN CERCLBACKUP INVITE ---');
+    const end = pasted.indexOf('--- END CERCLBACKUP INVITE ---');
+    if (start !== -1 && end !== -1) {
+      return pasted.slice(start + '--- BEGIN CERCLBACKUP INVITE ---'.length, end).trim();
+    }
+    return pasted.trim();
+  }
+
+  async function doEmailJoin() {
+    emailJoinError = '';
+    emailJoinResult = '';
+    try {
+      const json = extractPayloadJSON(emailPayload);
+      const payloadBytes = Array.from(new TextEncoder().encode(json));
+      const result = await JoinEmail(payloadBytes, emailJoinWords);
+      emailJoinResult = `Joined circle "${result.Circle}" — buddy ${result.PeerID}`;
+      await load();
+    } catch (e: any) {
+      emailJoinError = String(e);
+    }
+  }
 </script>
 
 <div class="buddies">
@@ -114,6 +163,41 @@
       <label>Serve port<input type="number" bind:value={servePort} /></label>
       <button on:click={doJoin}>{$t('buddies.join.button')}</button>
       {#if joinResult}<p class="ok">{joinResult}</p>{/if}
+    </div>
+
+    <div class="card">
+      <h3>{$t('buddies.emailInvite.title')}</h3>
+      <label>{$t('buddies.emailInvite.circle')}<input type="text" bind:value={emailCircle} /></label>
+      <label>{$t('buddies.emailInvite.to')}<input type="email" bind:value={emailTo} /></label>
+      <button on:click={generateEmailInvite}>{$t('buddies.emailInvite.generate')}</button>
+      {#if emailInviteError}<p class="error">{emailInviteError}</p>{/if}
+      {#if emailInvite}
+        <p class="warning">{$t('buddies.emailInvite.warning')}</p>
+        <label>{$t('buddies.emailInvite.subject')}
+          <input type="text" readonly value={emailInvite.Subject} />
+        </label>
+        <button on:click={() => copy(emailInvite!.Subject)}>{copied ? $t('common.copied') : $t('common.copy')}</button>
+        <label>{$t('buddies.emailInvite.body')}
+          <textarea readonly rows="8" value={emailInvite.Body}></textarea>
+        </label>
+        <button on:click={() => copy(emailInvite!.Body)}>{copied ? $t('common.copied') : $t('common.copy')}</button>
+        {#if emailTo}
+          <p><a href={mailtoLink()} target="_blank" rel="noreferrer">{$t('buddies.emailInvite.openMailto')}</a></p>
+        {/if}
+        <p><strong>{$t('buddies.invite.words')}:</strong> {emailInvite.Words} <button on:click={() => copy(emailInvite!.Words)}>{copied ? $t('common.copied') : $t('common.copy')}</button></p>
+      {/if}
+    </div>
+
+    <div class="card">
+      <h3>{$t('buddies.emailJoin.title')}</h3>
+      <p class="warning">{$t('buddies.emailJoin.warning')}</p>
+      <label>{$t('buddies.emailJoin.payload')}
+        <textarea rows="8" bind:value={emailPayload}></textarea>
+      </label>
+      <label>{$t('buddies.emailJoin.words')}<input type="text" bind:value={emailJoinWords} /></label>
+      <button on:click={doEmailJoin}>{$t('buddies.emailJoin.button')}</button>
+      {#if emailJoinError}<p class="error">{emailJoinError}</p>{/if}
+      {#if emailJoinResult}<p class="ok">{emailJoinResult}</p>{/if}
     </div>
   </div>
 </div>

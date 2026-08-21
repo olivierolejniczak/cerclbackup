@@ -135,7 +135,7 @@ Commands (Phase 2a — P2P):
   buddy    list --password <pwd>                 list known buddies
   revoke    --peer-id <id> --password <pwd>       remove a buddy and rebalance
   rebalance    --password <pwd> [--store <dir>]     redistribute shards to all buddies
-  invite-email --to <email> --circle <name> --password <pwd> [--smtp-*]  email MFA invite
+  invite-email --to <email> --circle <name> --password <pwd>  print email MFA invite to paste and send yourself
   join-email   --payload <file> --words "<12 words>" --password <pwd>    accept email invite
   manifest-pull --buddy-addr <multiaddr> --password <pwd>               recover manifest from buddy
   show-phrase   --password <pwd>                                         show 12-word recovery phrase
@@ -565,11 +565,6 @@ func runInviteEmail(args []string) {
 	to := fs.String("to", "", "recipient email address (required)")
 	circle := fs.String("circle", "CerclBackup", "circle name shown in email")
 	password := fs.String("password", cfg.Password, "keystore password (required)")
-	smtpHost := fs.String("smtp-host", "", "SMTP host (omit to print email to stdout)")
-	smtpPort := fs.Int("smtp-port", 587, "SMTP port")
-	smtpUser := fs.String("smtp-user", "", "SMTP username")
-	smtpPass := fs.String("smtp-pass", "", "SMTP password")
-	smtpFrom := fs.String("smtp-from", "", "SMTP sender address")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -578,30 +573,18 @@ func runInviteEmail(args []string) {
 		os.Exit(1)
 	}
 
-	params := api.InviteEmailParams{Password: *password, Circle: *circle}
-	if *smtpHost != "" {
-		params.SMTP = &api.SMTPConfig{
-			Host:     *smtpHost,
-			Port:     *smtpPort,
-			Username: *smtpUser,
-			Password: *smtpPass,
-			From:     *smtpFrom,
-		}
-	}
-	result, err := api.InviteEmail(params, *to)
+	result, err := api.InviteEmail(api.InviteEmailParams{Password: *password, Circle: *circle}, *to)
 	if err != nil {
 		log.Fatalf("invite-email: %v", err)
 	}
 
-	if result.Sent {
-		fmt.Printf("Email sent to %s\n", *to)
-	} else {
-		fmt.Println("=== PASTE THIS INTO YOUR EMAIL ===")
-		fmt.Println(string(result.PayloadJSON))
-		fmt.Println("==================================")
-	}
+	fmt.Println("CerclBackup does not send email itself — copy this into your own mail client:")
+	fmt.Printf("\nTo: %s\n", *to)
+	fmt.Printf("Subject: %s\n\n", result.Subject)
+	fmt.Println(result.Body)
 
-	fmt.Println("\n*** SHARE THIS CODE VIA SMS / SIGNAL / VOICE — NOT BY EMAIL ***")
+	fmt.Println("*** SHARE THIS CODE VIA SMS / SIGNAL / VOICE — NOT BY EMAIL ***")
+	fmt.Println("*** Confirm with the recipient by voice/in person that it's really them before they use it ***")
 	fmt.Printf("12-word OOB code: %s\n", result.Words)
 	fmt.Printf("Peer ID: %s\n", result.PeerID)
 }

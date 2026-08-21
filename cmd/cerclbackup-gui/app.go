@@ -194,20 +194,30 @@ func (a *App) Join(addr, words, name string, servePort int) (string, error) {
 	return api.Join(pw, addr, words, name, servePort)
 }
 
-func (a *App) InviteEmail(circleName string, smtp *api.SMTPConfig, to string) (*api.InviteEmailResult, error) {
+func (a *App) InviteEmail(circleName, to string) (*api.InviteEmailResult, error) {
 	pw, err := a.getPassword()
 	if err != nil {
 		return nil, err
 	}
-	return api.InviteEmail(api.InviteEmailParams{Password: pw, Circle: circleName, SMTP: smtp}, to)
+	return api.InviteEmail(api.InviteEmailParams{Password: pw, Circle: circleName}, to)
 }
 
-func (a *App) JoinEmail(payloadJSON []byte, words string) (string, string, error) {
+// JoinEmailResult is the outcome of a verified email invite join.
+type JoinEmailResult struct {
+	Circle string
+	PeerID string
+}
+
+func (a *App) JoinEmail(payloadJSON []byte, words string) (*JoinEmailResult, error) {
 	pw, err := a.getPassword()
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	return api.JoinEmail(pw, payloadJSON, words)
+	circleName, peerIDStr, err := api.JoinEmail(pw, payloadJSON, words)
+	if err != nil {
+		return nil, err
+	}
+	return &JoinEmailResult{Circle: circleName, PeerID: peerIDStr}, nil
 }
 
 // ---- Backup / Watch ----
