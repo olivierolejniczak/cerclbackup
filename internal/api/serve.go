@@ -100,7 +100,7 @@ func StartServe(params ServeParams) (*ServeHandle, error) {
 
 	d, err := p2pmod.StartDHT(ctx, h)
 	if err == nil {
-		go p2pmod.DialAllBuddies(ctx, h, d, reg)
+		go p2pmod.PeriodicDialAllBuddies(ctx, h, d, reg, p2pmod.DefaultRedialInterval)
 	}
 
 	scrubpkg.New(bs, h, reg).Start(ctx, 6*time.Hour)

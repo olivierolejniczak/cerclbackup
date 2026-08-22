@@ -112,3 +112,71 @@ func TestDialBuddyUnregisteredPeer(t *testing.T) {
 		t.Fatal("expected error for unregistered peer, got nil")
 	}
 }
+
+// TestPeriodicDialAllBuddiesRecoversStaleAddress verifies that a running
+// PeriodicDialAllBuddies loop — not just a one-shot call at startup — is
+// what lets a long-lived daemon recover once a buddy's address becomes
+// reachable again, without needing a restart.
+func TestPeriodicDialAllBuddiesRecoversStaleAddress(t *testing.T) {
+	dir := t.TempDir()
+
+	priv1, _, _ := crypto.GenerateEd25519Key(nil)
+	priv2, _, _ := crypto.GenerateEd25519Key(nil)
+
+	alice, err := p2p.NewHost(priv1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer alice.Close()
+
+	bob, err := p2p.NewHost(priv2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bob.Close()
+
+	aliceReg, _ := buddy.NewRegistry(filepath.Join(dir, "alice_reg.enc"), testMasterKey)
+	bobPub := testutil.MarshaledPubKey(t, bob)
+
+	// Bob's registered address is stale (unreachable) — mirrors a buddy
+	// whose WAN IP changed since the last successful connection.
+	if err := aliceReg.Add(&buddy.Entry{
+		PeerID:       bob.ID().String(),
+		PubKey:       bobPub,
+		FriendlyName: "Bob",
+		Addrs:        []string{"/ip4/127.0.0.1/tcp/1"},
+	}); err != nil {
+		t.Fatalf("aliceReg.Add: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	const interval = 150 * time.Millisecond
+	go p2p.PeriodicDialAllBuddies(ctx, alice, nil, aliceReg, interval)
+
+	// First attempt (immediate, at loop start) must fail: no connection yet.
+	time.Sleep(50 * time.Millisecond)
+	if len(alice.Network().ConnsToPeer(bob.ID())) != 0 {
+		t.Fatal("did not expect a connection before the stale addr is fixed")
+	}
+
+	// Simulate learning Bob's real address by some other means (e.g. a
+	// fresh join, or a manifest-pull) after the initial dial already failed.
+	var bobAddrs []string
+	for _, a := range bob.Addrs() {
+		bobAddrs = append(bobAddrs, a.String())
+	}
+	aliceReg.UpdateAddrs(bob.ID().String(), bobAddrs)
+
+	// The next periodic tick should pick up the corrected address and
+	// connect — without alice's serve daemon ever restarting.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(alice.Network().ConnsToPeer(bob.ID())) > 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("expected periodic redial to connect to Bob after address was corrected")
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/cerclbackup/cerclbackup/internal/buddy"
 )
+
+// DefaultRedialInterval is how often PeriodicDialAllBuddies retries buddies
+// it isn't currently connected to. h.Connect is a no-op for peers already
+// connected, so this is safe to run indefinitely without disrupting healthy
+// connections.
+const DefaultRedialInterval = 10 * time.Minute
 
 // DialBuddy connects to a registered buddy using a two-step strategy:
 //
@@ -71,6 +78,26 @@ func DialAllBuddies(ctx context.Context, h host.Host, d *dht.IpfsDHT, reg *buddy
 		}
 		if err := DialBuddy(ctx, h, d, reg, pid); err != nil {
 			log.Printf("[dialer] could not reach %s (%s): %v", entry.FriendlyName, pid, err)
+		}
+	}
+}
+
+// PeriodicDialAllBuddies runs DialAllBuddies immediately and then every
+// interval until ctx is cancelled. This is what lets a long-running serve
+// daemon recover from a buddy's address changing (stale stored address,
+// buddy's WAN IP changed, etc.) without requiring a manual daemon restart —
+// previously DialAllBuddies only ran once, at startup.
+func PeriodicDialAllBuddies(ctx context.Context, h host.Host, d *dht.IpfsDHT, reg *buddy.Registry, interval time.Duration) {
+	DialAllBuddies(ctx, h, d, reg)
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			DialAllBuddies(ctx, h, d, reg)
 		}
 	}
 }
