@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +13,26 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 )
+
+// preferredOutboundIP returns the local address the OS routing table would
+// pick for outbound traffic (e.g. the real LAN IP on eth0), so Invite can
+// avoid offering an unreachable address from a virtual interface such as
+// Docker's docker0 bridge — those addresses sort earlier in the interface
+// list on hosts that have Docker installed, silently breaking invites.
+// The UDP "connection" below never sends a packet; it only performs a local
+// routing lookup for the given destination.
+func preferredOutboundIP() string {
+	conn, err := net.Dial("udp4", "203.0.113.1:1")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	host, _, err := net.SplitHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return ""
+	}
+	return host
+}
 
 // OpenInviteManager opens the on-disk invite-code manager used by both
 // Invite and the `serve` daemon's incoming-invite handler.
@@ -88,12 +109,22 @@ func Invite(password string, servePort int) (*InviteResult, error) {
 	}
 
 	joinAddr := ""
-	for _, a := range addrs {
-		if strings.Contains(a, "/169.254.") || strings.Contains(a, "/127.0.0.1/") || strings.Contains(a, "/::1/") {
-			continue
+	if preferred := preferredOutboundIP(); preferred != "" && preferred != "127.0.0.1" && preferred != "::1" && !strings.HasPrefix(preferred, "169.254.") {
+		for _, a := range addrs {
+			if strings.Contains(a, "/"+preferred+"/") {
+				joinAddr = a
+				break
+			}
 		}
-		joinAddr = a
-		break
+	}
+	if joinAddr == "" {
+		for _, a := range addrs {
+			if strings.Contains(a, "/169.254.") || strings.Contains(a, "/127.0.0.1/") || strings.Contains(a, "/::1/") {
+				continue
+			}
+			joinAddr = a
+			break
+		}
 	}
 	if joinAddr == "" {
 		for _, a := range addrs {
