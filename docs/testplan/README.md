@@ -8,9 +8,9 @@ Full end-to-end test covering all features across three real machines.
 
 | ID | User | OS | Notes |
 |----|------|----|-------|
-| **A** | [redacted] | Windows 11 Pro | Primary user, GUI + systray |
-| **B** | [redacted] | Linux DietPi | Headless, CLI only |
-| **C** | [redacted] | Linux DietPi | Headless, CLI only |
+| **A** | User A | Windows 11 Pro | Primary user, GUI + systray |
+| **B** | User B | Linux DietPi | Headless, CLI only |
+| **C** | User C | Linux DietPi | Headless, CLI only |
 
 ## Network topology
 
