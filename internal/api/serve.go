@@ -19,10 +19,11 @@ import (
 
 // ServeParams configures StartServe.
 type ServeParams struct {
-	Password   string
-	Port       int    // 0 = p2pmod.DefaultPort
-	UploadKbps int    // 0 = unlimited
-	HealthAddr string // empty = no HTTP health/metrics endpoint
+	Password       string
+	Port           int           // 0 = p2pmod.DefaultPort
+	UploadKbps     int           // 0 = unlimited
+	HealthAddr     string        // empty = no HTTP health/metrics endpoint
+	RedialInterval time.Duration // 0 = p2pmod.DefaultRedialInterval
 }
 
 // ServeHandle controls a running daemon started by StartServe.
@@ -98,9 +99,13 @@ func StartServe(params ServeParams) (*ServeHandle, error) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 
+	redialInterval := params.RedialInterval
+	if redialInterval == 0 {
+		redialInterval = p2pmod.DefaultRedialInterval
+	}
 	d, err := p2pmod.StartDHT(ctx, h)
 	if err == nil {
-		go p2pmod.PeriodicDialAllBuddies(ctx, h, d, reg, p2pmod.DefaultRedialInterval)
+		go p2pmod.PeriodicDialAllBuddies(ctx, h, d, reg, redialInterval)
 	}
 
 	scrubpkg.New(bs, h, reg).Start(ctx, 6*time.Hour)

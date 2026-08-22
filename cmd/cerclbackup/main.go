@@ -285,6 +285,7 @@ func runServe(args []string) {
 	port := fs.Int("port", p2pmod.DefaultPort, "TCP/UDP port for libp2p")
 	uploadKbps := fs.Int("upload-kbps", cfg.UploadKbps, "Max upload speed in KB/s (0 = unlimited)")
 	healthAddr := fs.String("health-addr", cfg.HealthAddr, "HTTP health/metrics endpoint address (empty = disabled)")
+	redialInterval := fs.Duration("redial-interval", p2pmod.DefaultRedialInterval, "how often to retry unreachable buddies (stored addr, then DHT)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatal(err)
 	}
@@ -293,10 +294,11 @@ func runServe(args []string) {
 		os.Exit(1)
 	}
 	handle, err := api.StartServe(api.ServeParams{
-		Password:   *password,
-		Port:       *port,
-		UploadKbps: *uploadKbps,
-		HealthAddr: *healthAddr,
+		Password:       *password,
+		Port:           *port,
+		UploadKbps:     *uploadKbps,
+		HealthAddr:     *healthAddr,
+		RedialInterval: *redialInterval,
 	})
 	if err != nil {
 		log.Fatal(err)
