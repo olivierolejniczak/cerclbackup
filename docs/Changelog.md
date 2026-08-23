@@ -13,6 +13,8 @@ All notable changes are documented here, grouped by development phase.
 - `cmd/cerclbackup-gui/`: full Wails desktop GUI (Svelte + TS frontend, French/English i18n) covering every CLI subcommand — setup, circle, backup/watch, restore, buddies, maintenance, settings — plus a system tray icon and hide-on-close behavior; replaces `cmd/cerclbackup-tray`
 - `internal/api/`: extraction layer wrapping the CLI's business logic in JSON-serializable functions shared by both the CLI and the GUI
 - `internal/api/dashboard.go`: aggregated health status (doctor + buddy + storage) for the GUI dashboard
+- `cerclbackup serve --redial-interval`: `serve` now retries unreachable buddies (stored address, then DHT) on a periodic background loop (default 10 min), not just once at startup — a buddy's changed address is picked up automatically without restarting the daemon
+- `docs/howto-windows-gui.md`: GUI-only walkthrough for non-technical Windows users (install, setup, pairing, backup, restore, tray)
 
 ### Removed
 - `cmd/cerclbackup-tray/`: superseded by `cmd/cerclbackup-gui`, which owns both the window and the tray icon in a single process
