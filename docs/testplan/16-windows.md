@@ -165,7 +165,7 @@ Fixed in `1cc7dc9` (Settings load crash, `settings.config.init` i18n key added t
 
 - [x] PASS — fix present in code and confirmed via `go build`/`wails build`
 - [x] PASS — fix shipped in v1.0.4 (MSI available for install)
-- [ ] PASS — re-verified live on Windows GUI
+- [ ] PASS — re-verified live on Windows GUI — **PENDING**, not yet re-tested on machine A
 - [ ] FAIL — notes: ___
 
 ---
@@ -208,7 +208,7 @@ Fixed in `1cc7dc9`: `.grid { min-width: 0 }` plus a `@media (max-width: 900px)` 
 
 - [x] PASS — layout/copy-feedback fix present in code and confirmed via `wails build`
 - [x] PASS — fix shipped in v1.0.4 (MSI available for install)
-- [ ] PASS — full end-to-end buddy pairing tested across two real machines (this step only covered self-join validation on machine A)
+- [ ] PASS — full end-to-end buddy pairing tested across two real machines (this step only covered self-join validation on machine A) — **PENDING**, not yet re-tested on machine A
 - [ ] FAIL — notes: ___
 
 ---
@@ -246,5 +246,5 @@ Regression-tested headlessly (no Windows display available in this pass): a temp
 
 - [x] PASS — audit bug fixed and regression-tested at the API layer; feedback placement fix confirmed in source
 - [x] PASS — fix shipped in v1.0.4 (MSI available for install)
-- [ ] PASS — re-verified live by clicking through the Maintenance tab on the Windows GUI
+- [ ] PASS — re-verified live by clicking through the Maintenance tab on the Windows GUI — **PENDING**, not yet re-tested on machine A
 - [ ] FAIL — notes: ___
