@@ -38,31 +38,30 @@ IP with the listening port forwarded on the router. There is currently
 real address to connect to up front.
 
 *After* pairing, if a buddy's reachable address changes (WAN IP change,
-router restart, etc.), reconnection is **not automatic mid-session**. Two
-separate code paths matter here, and only one of them retries automatically:
+router restart, etc.), a running `serve` daemon now recovers on its own:
 
 - `backup`/`restore` only try each buddy's last-known **stored address**.
   If it's stale, they fail/queue for that buddy and move on — they do not
   fall back to a DHT lookup themselves.
-- `DialAllBuddies` — which tries the stored address first, and falls back
-  to a **DHT lookup keyed on the buddy's permanent peer ID** if that
-  fails — only runs once, at `serve` daemon startup.
-
-So in practice: **restarting your `serve` daemon is what fixes a stale
-buddy address**, via the DHT. It's not something that happens transparently
-while `serve` keeps running.
+- `serve` runs `PeriodicDialAllBuddies` in the background (default every
+  **10 minutes**, override with `--redial-interval`), which tries the
+  stored address first and falls back to a **DHT lookup keyed on the
+  buddy's permanent peer ID** if that fails, persisting whatever address
+  it finds. Previously this only ran once at `serve` startup, so a stale
+  address required a manual restart to fix — that's no longer necessary.
 
 This guide demonstrates that reconnection mechanism end-to-end for real —
 stop/reassign one buddy's address, show the stale-address failure, then
-show `serve` restart fixing it via a genuine DHT lookup. It does **not**
-demonstrate literal public-internet reachability with real router port
-forwarding — that needs real router admin access on separate physical
-WANs, which wasn't available for this write-up. The 4 "networks" below are
-isolated Docker bridge networks (private-subnet interfaces on each
-container cannot reach each other at all, verified below), with a second
-shared interface standing in for "public IP, port forwarded" on each
-machine. See the caveat at the end of that section for the one way this
-simulation is *more* permissive than a real WAN.
+show the periodic redial loop fixing it via a genuine DHT lookup, with no
+`serve` restart involved. It does **not** demonstrate literal
+public-internet reachability with real router port forwarding — that needs
+real router admin access on separate physical WANs, which wasn't available
+for this write-up. The 4 "networks" below are isolated Docker bridge
+networks (private-subnet interfaces on each container cannot reach each
+other at all, verified below), with a second shared interface standing in
+for "public IP, port forwarded" on each machine. See the caveat at the end
+of that section for the one way this simulation is *more* permissive than
+a real WAN.
 
 ## Prerequisites
 
@@ -253,13 +252,12 @@ $ docker exec cercl-lan1 cerclbackup backup --src demofile2.txt --store ... --pa
 [backup] buddy 12D3KooWQS9FTZQud54xA7TeuqiNphgpVLD5YKgpvmQQkRkmf6uR unreachable, enqueueing 3 shards
 ```
 
-Confirmed: this doesn't fix itself while `serve` keeps running. Restarting
-`serve` triggers `DialAllBuddies`, which retries the stored address, then
-falls back to a DHT lookup keyed on the buddy's permanent peer ID:
+`serve`'s background redial loop (default every 10 minutes; use a short
+interval like `--redial-interval 15s` for a demo like this one) picks this
+up on its own — no restart needed:
 
 ```
-$ docker restart cercl-lan1
-$ docker exec -d cercl-lan1 sh -c "... cerclbackup serve --password 'DemoPassLan1123!' --port 7001 ..."
+$ docker exec -d cercl-lan1 sh -c "... cerclbackup serve --password 'DemoPassLan1123!' --port 7001 --redial-interval 15s ..."
 
 [dialer] connected to 12D3KooWEKdnqMHcdwRhDaREA1rqZKReCsbSJegaT4Vzb9zRvCKA via stored addrs
 [dialer] connected to 12D3KooWAYppCSeq185nY5yKurgDTCgSDnct3tKG9LSncgLKGBkA via stored addrs
@@ -269,13 +267,14 @@ $ docker exec -d cercl-lan1 sh -c "... cerclbackup serve --password 'DemoPassLan
 ```
 
 Notice the timing: the stored-address attempt fails fast, but the DHT
-fallback takes a few extra seconds (~4s here) to resolve — don't assume a
-buddy is unreachable just because it's not in the very first burst of
+fallback takes a few extra seconds (~4s here) to resolve, and only happens
+on the *next* redial tick after the address actually breaks — don't assume
+a buddy is unreachable just because it's not in the very first burst of
 `[dialer] connected` lines right after `serve` starts.
 
 Confirmed the connection actually works again, not just that libp2p
-found a route — a new backup reaches all 3 buddies including the one whose
-address changed:
+found a route — a new backup, run any time after that tick, reaches all
+3 buddies including the one whose address changed:
 
 ```
 $ docker exec cercl-lan1 cerclbackup backup --src demofile3.txt --store ... --password ... --buddies 3
@@ -285,10 +284,11 @@ $ docker exec cercl-lan1 cerclbackup backup --src demofile3.txt --store ... --pa
 [backup] pushed 3/3 shards to buddy 12D3KooWQS9FTZQud54xA7TeuqiNphgpVLD5YKgpvmQQkRkmf6uR
 ```
 
-**Takeaway:** if a buddy's address changes and things stop syncing,
-restart your `serve` daemon before assuming something is broken — that's
-currently the trigger for rediscovery, not something that happens
-automatically mid-session.
+**Takeaway:** if a buddy's address changes, a running `serve` daemon
+recovers on its own within one redial interval (10 minutes by default) —
+no restart needed. If you want faster recovery for a time-sensitive setup,
+lower `--redial-interval`; there's no downside to a short interval since
+`h.Connect` is a no-op for buddies already connected.
 
 ## Cleanup (if this was just a test)
 

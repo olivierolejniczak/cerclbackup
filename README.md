@@ -32,7 +32,19 @@ Your files are split into chunks, compressed with zstd, protected by Reed-Solomo
 
 ---
 
-## Quick start
+## Quick start — Windows desktop GUI
+
+Most people should start here, no command line required:
+
+1. Download `CerclBackup-X.Y.Z.msi` from [Releases](../../releases) and run it.
+2. It starts hidden in the system tray. Right-click the icon → **Show window** to run first-time setup (password + recovery phrase).
+3. **Buddies** tab → generate/accept invites with 3 friends. **Backup** tab → pick a folder, run or watch it. **Restore** tab → get a file back.
+
+Full walkthrough with screenshots: **[docs/howto-windows-gui.md](docs/howto-windows-gui.md)**.
+
+The same GUI (Wails-based) also runs on Linux — see [Installation](#installation) below.
+
+## Quick start — CLI
 
 ```bash
 # 1. Initialise — generates Ed25519 identity, AES master key, 12-word recovery phrase
@@ -156,9 +168,10 @@ Circles let you isolate key material across groups of buddies. Each circle uses 
 
 | Command | Description |
 |---|---|
-| `cerclbackup serve` | Run background daemon: libp2p server, mDNS, DHT, scrub every 6h |
+| `cerclbackup serve` | Run background daemon: libp2p server, mDNS, DHT, scrub every 6h, periodic buddy redial every 10 min |
 | `cerclbackup serve --health-addr 127.0.0.1:7743` | Enable HTTP health and metrics endpoint |
 | `cerclbackup serve --upload-kbps 500` | Cap upload bandwidth |
+| `cerclbackup serve --redial-interval 1m` | Override how often unreachable buddies are retried (stored addr, then DHT) |
 
 #### Health endpoint
 
@@ -263,7 +276,11 @@ CI (GitHub Actions) runs on every push across Linux and Windows. Release MSIs ar
 
 See [docs/runbook-3-buddy-exchange](docs/runbook-3-buddy-exchange/README.md) for a
 walkthrough (CLI + GUI, with screenshots) of a full multi-buddy pairing,
-backup, and restore exchange.
+backup, and restore exchange, [docs/howto-windows-gui.md](docs/howto-windows-gui.md)
+for a GUI-only Windows walkthrough aimed at non-technical users, and
+[docs/howto-3-buddy-wan-backup.md](docs/howto-3-buddy-wan-backup.md) for a
+real cross-network (WAN) pairing walkthrough including reconnection after
+a buddy's address changes.
 
 ---
 
