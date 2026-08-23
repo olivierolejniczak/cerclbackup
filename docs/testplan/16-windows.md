@@ -2,6 +2,12 @@
 
 **Machine A only.** Requires the Windows GUI, PowerShell 5.1, and the MSI-installed binaries.
 
+**Status:** all bugs found in this phase (16.8, 16.9, 16.10) were fixed in `1cc7dc9` and shipped in
+**[v1.0.4](https://github.com/olivierolejniczak/cerclbackup/releases/tag/v1.0.4)** (tagged 2026-08-23,
+MSI/binaries built and published by CI). Fixes are code-verified (regression test at the `internal/api`
+layer, `go test ./...`, `wails build -tags webkit2_41`) but not yet re-clicked-through live on the Windows
+GUI — that re-verification pass is still open, install `v1.0.4` on machine A to do it.
+
 ---
 
 ## Step 16.1 — Tray icon visible
@@ -155,9 +161,10 @@ Quit the app fully (`Stop-Process -Name cerclbackup-gui -Force` or tray → Quit
 - **FAIL** — Settings view shows a raw `TypeError: (intermediate value) is not iterable` at the top of the page on load. Needs repro/root-cause (likely a failed data fetch feeding the settings view) and a fix before release.
 - **FAIL** — The "Init config file" button (under "Fichier de configuration" / "Configuration file") does not have a French translation — it stays in English ("Init config file") when the rest of the UI is in French. Missing i18n key.
 
-Fixed in `1cc7dc9` (Settings load crash, `settings.config.init` i18n key added to both locales). Code-verified: `settings.config.init` present in `en.json`/`fr.json`, Linux GUI builds clean with the fix. Still needs a real click-through re-test on the Windows machine to confirm the crash no longer appears live.
+Fixed in `1cc7dc9` (Settings load crash, `settings.config.init` i18n key added to both locales), shipped in **v1.0.4**. Code-verified: `settings.config.init` present in `en.json`/`fr.json`, Linux GUI builds clean with the fix. Still needs a real click-through re-test on the Windows machine to confirm the crash no longer appears live.
 
 - [x] PASS — fix present in code and confirmed via `go build`/`wails build`
+- [x] PASS — fix shipped in v1.0.4 (MSI available for install)
 - [ ] PASS — re-verified live on Windows GUI
 - [ ] FAIL — notes: ___
 
@@ -197,9 +204,10 @@ Unlock the app, go to **Buddies**. Confirm the empty state (no buddies yet): Nam
 
 **Minor issue — default window size:** at the app's default launch size, the two-column Invite/Join layout on this page overflows and requires horizontal scrolling to reach the "Join a buddy" panel and the right edge of "Buddy address"/"Invite words" fields. Confirmed fine once the window is maximized — likely just needs a smaller default width breakpoint or a slightly larger default window size.
 
-Fixed in `1cc7dc9`: `.grid { min-width: 0 }` plus a `@media (max-width: 900px)` breakpoint that collapses the two-column Invite/Join layout to one column. Also added copy-button "Copied!" feedback (`common.copied` i18n key, used in Buddies.svelte). Code-verified via `wails build`; still needs a live re-check at default window size on Windows.
+Fixed in `1cc7dc9`: `.grid { min-width: 0 }` plus a `@media (max-width: 900px)` breakpoint that collapses the two-column Invite/Join layout to one column. Also added copy-button "Copied!" feedback (`common.copied` i18n key, used in Buddies.svelte). Shipped in **v1.0.4**. Code-verified via `wails build`; still needs a live re-check at default window size on Windows.
 
 - [x] PASS — layout/copy-feedback fix present in code and confirmed via `wails build`
+- [x] PASS — fix shipped in v1.0.4 (MSI available for install)
 - [ ] PASS — full end-to-end buddy pairing tested across two real machines (this step only covered self-join validation on machine A)
 - [ ] FAIL — notes: ___
 
@@ -234,8 +242,9 @@ Unlock the app, go to **Maintenance**. Confirm all six panels render: Prune old 
 
 Both fixed in `1cc7dc9`: all shard-store opens now route through a shared helper (`api.OpenStore`) that defaults an empty path to `storage.DefaultStorePath()` consistently across Audit/Storage/Doctor/Data — no more empty-path crash. Maintenance.svelte now renders both error and success feedback in one `.feedback` panel at the top of the page, with `scrollIntoView` on every run so a fresh result is never below the fold.
 
-Regression-tested headlessly (no Windows display available in this pass): a temporary Go test called `api.Audit(pw, "")`, `api.Dashboard(pw, "")`, and `api.Storage(pw, "")` exactly as the GUI does — all three now succeed against a fresh empty store instead of erroring. Full `go test ./...` and `wails build -tags webkit2_41` both pass.
+Regression-tested headlessly (no Windows display available in this pass): a temporary Go test called `api.Audit(pw, "")`, `api.Dashboard(pw, "")`, and `api.Storage(pw, "")` exactly as the GUI does — all three now succeed against a fresh empty store instead of erroring. Full `go test ./...` and `wails build -tags webkit2_41` both pass. Shipped in **v1.0.4**.
 
 - [x] PASS — audit bug fixed and regression-tested at the API layer; feedback placement fix confirmed in source
+- [x] PASS — fix shipped in v1.0.4 (MSI available for install)
 - [ ] PASS — re-verified live by clicking through the Maintenance tab on the Windows GUI
 - [ ] FAIL — notes: ___
