@@ -372,12 +372,12 @@ func (a *App) BuddyRemove(peerID string, skipRebalance bool) error {
 
 // ---- Maintenance ----
 
-func (a *App) Rebalance() (rebalance.Result, error) {
+func (a *App) Rebalance(storeDir string) (rebalance.Result, error) {
 	pw, err := a.getPassword()
 	if err != nil {
 		return rebalance.Result{}, err
 	}
-	return api.Rebalance(pw)
+	return api.Rebalance(pw, storeDir)
 }
 
 func (a *App) Audit(storeDir string) (*api.AuditResult, error) {

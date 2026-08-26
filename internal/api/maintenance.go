@@ -20,8 +20,9 @@ import (
 )
 
 // Rebalance redistributes shards for every backed-up file across the
-// currently registered buddies (e.g. after a buddy was removed).
-func Rebalance(password string) (rebalance.Result, error) {
+// currently registered buddies (e.g. after a buddy was removed). An empty
+// storeDir defaults to storage.DefaultStorePath().
+func Rebalance(password, storeDir string) (rebalance.Result, error) {
 	if password == "" {
 		return rebalance.Result{}, fmt.Errorf("password is required")
 	}
@@ -44,7 +45,7 @@ func Rebalance(password string) (rebalance.Result, error) {
 		return rebalance.Result{}, fmt.Errorf("registry: %w", err)
 	}
 
-	localStore, err := storage.New(storage.DefaultStorePath())
+	localStore, err := OpenStore(storeDir)
 	if err != nil {
 		return rebalance.Result{}, fmt.Errorf("open local store: %w", err)
 	}

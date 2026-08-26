@@ -473,9 +473,7 @@ func runRebalance(args []string) {
 		fs.Usage()
 		os.Exit(1)
 	}
-	_ = storeDir // rebalance always targets storage.DefaultStorePath() for now
-
-	res, err := api.Rebalance(*password)
+	res, err := api.Rebalance(*password, *storeDir)
 	if err != nil {
 		log.Fatalf("[rebalance] %v", err)
 	}

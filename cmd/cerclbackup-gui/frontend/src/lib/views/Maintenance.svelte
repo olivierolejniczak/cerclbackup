@@ -63,7 +63,7 @@
 
     <div class="card">
       <h3>{$t('maintenance.rebalance')}</h3>
-      <button on:click={() => run(() => Rebalance())}>{$t('maintenance.rebalance.run')}</button>
+      <button on:click={() => run(() => Rebalance(''))}>{$t('maintenance.rebalance.run')}</button>
     </div>
 
     <div class="card">

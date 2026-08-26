@@ -115,7 +115,7 @@ func BuddyRemove(password, peerID string, skipRebalance bool) error {
 		return err
 	}
 	if !skipRebalance {
-		_, _ = Rebalance(password) // best-effort; rebalance failures don't undo the removal
+		_, _ = Rebalance(password, "") // best-effort; rebalance failures don't undo the removal
 	}
 	return nil
 }

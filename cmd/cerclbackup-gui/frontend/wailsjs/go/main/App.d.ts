@@ -70,7 +70,7 @@ export function Passwd(arg1:string,arg2:string):Promise<void>;
 
 export function Prune(arg1:number,arg2:number,arg3:number,arg4:boolean,arg5:string):Promise<api.PruneResult>;
 
-export function Rebalance():Promise<rebalance.Result>;
+export function Rebalance(arg1:string):Promise<rebalance.Result>;
 
 export function Recover(arg1:string,arg2:string):Promise<api.RecoverResult>;
 

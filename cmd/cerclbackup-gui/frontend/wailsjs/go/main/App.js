@@ -126,8 +126,8 @@ export function Prune(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['Prune'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function Rebalance() {
-  return window['go']['main']['App']['Rebalance']();
+export function Rebalance(arg1) {
+  return window['go']['main']['App']['Rebalance'](arg1);
 }
 
 export function Recover(arg1, arg2) {
