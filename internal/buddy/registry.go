@@ -130,26 +130,39 @@ func (r *Registry) Remove(peerID string) error {
 	return r.save()
 }
 
-// IsKnown returns true if the given PeerID is in the registry.
+// IsKnown returns true if the given PeerID is in the registry. It reloads
+// from disk first for the same reason as Add: a long-running `serve` daemon
+// must see buddies added by a separate, later CLI process.
 func (r *Registry) IsKnown(peerID string) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return false
+	}
 	_, ok := r.byPeerID[peerID]
 	return ok
 }
 
-// Get returns the entry for a PeerID, if present.
+// Get returns the entry for a PeerID, if present. It reloads from disk first
+// for the same reason as Add.
 func (r *Registry) Get(peerID string) (*Entry, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return nil, false
+	}
 	e, ok := r.byPeerID[peerID]
 	return e, ok
 }
 
-// List returns all known buddies.
+// List returns all known buddies. It reloads from disk first for the same
+// reason as Add.
 func (r *Registry) List() []*Entry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.load(); err != nil {
+		return nil
+	}
 	out := make([]*Entry, 0, len(r.byPeerID))
 	for _, e := range r.byPeerID {
 		out = append(out, e)
