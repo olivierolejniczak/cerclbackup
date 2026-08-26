@@ -216,11 +216,17 @@ func handleInvite(s network.Stream, h host.Host, reg *buddy.Registry, invMgr *in
 	// Add joiner to registry, including the addresses it self-reported so
 	// this side can dial it back immediately without waiting on mDNS/DHT
 	// discovery (which often never succeeds across NATs on the internet).
+	//
+	// FriendlyName is intentionally left unset: req.FriendlyName is the
+	// label the joiner chose for *this* side (the inviter), not a name the
+	// joiner is reporting about itself — using it here would store the
+	// inviter's own local name in the joiner's own entry. There is no
+	// self-reported name in this protocol; the inviter names its buddies
+	// locally, same as an email invite already leaves this unset.
 	if err := reg.Add(&buddy.Entry{
-		PeerID:       req.PeerID,
-		PubKey:       req.PubKey,
-		FriendlyName: req.FriendlyName,
-		Addrs:        req.Addrs,
+		PeerID: req.PeerID,
+		PubKey: req.PubKey,
+		Addrs:  req.Addrs,
 	}); err != nil {
 		log.Printf("[handler] add buddy: %v", err)
 	}
@@ -254,12 +260,11 @@ func SendInviteRequest(ctx context.Context, h host.Host, reg *buddy.Registry,
 	}
 
 	req := wire.InviteRequest{
-		Type:         wire.TypeInviteRequest,
-		Token:        token,
-		PeerID:       h.ID().String(),
-		PubKey:       ownPubBytes,
-		FriendlyName: friendlyName,
-		Addrs:        myAddrs,
+		Type:   wire.TypeInviteRequest,
+		Token:  token,
+		PeerID: h.ID().String(),
+		PubKey: ownPubBytes,
+		Addrs:  myAddrs,
 	}
 	if err := wire.WriteMsg(s, req); err != nil {
 		return err
